@@ -8,38 +8,101 @@ import time
 import requests
 import json
 import uuid
+import gc
+import traceback
 from pathlib import Path
 
 # =====================================================================
-# PRO SWING COMMANDER v2 — Decision Engine Edition
+# PRO SWING COMMANDER v2.1 — hardened for Streamlit Cloud
 #
-# One button ("Run Tracker") produces:
-#   1. Market regime check (SPY vs 50-day MA) — gates all new longs
-#   2. Relative-strength ranked scan (vs SPY, percentile-based —
-#      fixes the "everything scores 95" saturation problem)
-#   3. Complete trade PLANS: entry trigger, stop, target, shares,
-#      $ risk, R:R — after passing vetoes (earnings window, sector
-#      cap, portfolio heat)
-#   4. Exit ACTION LIST for open trades: breakeven moves, trailing
-#      stops (chandelier), targets hit, time stops
-#   5. Auto-journal: plans flow into trades, closes compute R-multiples
+# Crash fixes vs v2:
+#  - Chunked downloads (25 tickers at a time) + float32 + gc.collect()
+#    -> stays well under Community Cloud's memory limit
+#  - Static SECTOR_MAP replaces ~30 heavy .info calls (each .info pulls
+#    a multi-MB JSON; that was the main memory/rate-limit risk)
+#  - .info now fetched ONLY for earnings-date checks on final plan
+#    candidates, capped at 15 calls
+#  - run_tracker wrapped in try/except: errors render in the app
+#    instead of killing the container
 # =====================================================================
 
 st.set_page_config(page_title="Pro Swing Commander", page_icon="📈", layout="wide")
 
 # ========== STRATEGY CONFIG ==========
-HOLD_WINDOW_DAYS = 15        # typical swing hold; earnings inside this = veto
-EARNINGS_VETO_DAYS = 21      # veto if earnings within this many days
-TIME_STOP_DAYS = 10          # exit stale trades after this many days if < 0.5R
-MAX_POSITIONS = 5            # max concurrent open trades
-MAX_PER_SECTOR = 2           # max open trades in one sector
-TRAIL_ATR_MULT = 3.0         # chandelier trailing stop multiplier
-MAX_POSITION_PCT = 0.25      # no single position > 25% of account
-MAX_INFO_FETCHES = 30        # only fetch slow .info for top candidates
-ENTRY_BUFFER = 1.001         # buy-stop trigger = prior high * this
+HOLD_WINDOW_DAYS = 15
+EARNINGS_VETO_DAYS = 21
+TIME_STOP_DAYS = 10
+MAX_POSITIONS = 5
+MAX_PER_SECTOR = 2
+TRAIL_ATR_MULT = 3.0
+MAX_POSITION_PCT = 0.25
+MAX_EARNINGS_CHECKS = 15     # cap on slow .info fetches per scan
+ENTRY_BUFFER = 1.001
+DOWNLOAD_CHUNK = 25          # tickers per yf.download batch
 
 TRADES_FILE = Path("trades.json")
 SCAN_FILE = Path("last_scan.json")
+
+# ========== STATIC SECTOR MAP (replaces .info sector lookups) ==========
+SECTOR_MAP = {
+    # Technology
+    'AAPL': 'Technology', 'MSFT': 'Technology', 'NVDA': 'Technology', 'AMD': 'Technology',
+    'INTC': 'Technology', 'ORCL': 'Technology', 'IBM': 'Technology', 'CSCO': 'Technology',
+    'QCOM': 'Technology', 'TXN': 'Technology', 'AVGO': 'Technology', 'MU': 'Technology',
+    'LRCX': 'Technology', 'KLAC': 'Technology', 'AMAT': 'Technology', 'PLTR': 'Technology',
+    'SNOW': 'Technology', 'DDOG': 'Technology', 'MDB': 'Technology', 'ZS': 'Technology',
+    'NET': 'Technology', 'CRWD': 'Technology', 'PANW': 'Technology', 'FTNT': 'Technology',
+    'OKTA': 'Technology', 'SMCI': 'Technology', 'DELL': 'Technology', 'HPQ': 'Technology',
+    'WDC': 'Technology', 'STX': 'Technology', 'NTAP': 'Technology', 'PSTG': 'Technology',
+    # Financials
+    'JPM': 'Financials', 'BAC': 'Financials', 'WFC': 'Financials', 'C': 'Financials',
+    'GS': 'Financials', 'MS': 'Financials', 'V': 'Financials', 'MA': 'Financials',
+    'PYPL': 'Financials', 'XYZ': 'Financials', 'AXP': 'Financials', 'COF': 'Financials',
+    'DFS': 'Financials', 'SYF': 'Financials', 'ALLY': 'Financials', 'USB': 'Financials',
+    'PNC': 'Financials', 'TFC': 'Financials', 'MTB': 'Financials', 'FITB': 'Financials',
+    'AFRM': 'Financials', 'UPST': 'Financials', 'SOFI': 'Financials', 'HOOD': 'Financials',
+    'COIN': 'Financials', 'RIOT': 'Crypto', 'MARA': 'Crypto', 'HUT': 'Crypto',
+    # Healthcare
+    'JNJ': 'Healthcare', 'PFE': 'Healthcare', 'MRK': 'Healthcare', 'ABBV': 'Healthcare',
+    'UNH': 'Healthcare', 'CVS': 'Healthcare', 'ABT': 'Healthcare', 'TMO': 'Healthcare',
+    'DHR': 'Healthcare', 'AMGN': 'Healthcare', 'GILD': 'Healthcare', 'BMY': 'Healthcare',
+    'REGN': 'Healthcare', 'VRTX': 'Healthcare', 'BIIB': 'Healthcare', 'ILMN': 'Healthcare',
+    'MTD': 'Healthcare', 'WST': 'Healthcare', 'ZBH': 'Healthcare', 'SYK': 'Healthcare',
+    # Consumer Discretionary
+    'AMZN': 'Consumer Discretionary', 'TSLA': 'Consumer Discretionary',
+    'HD': 'Consumer Discretionary', 'LOW': 'Consumer Discretionary',
+    'MCD': 'Consumer Discretionary', 'SBUX': 'Consumer Discretionary',
+    'NKE': 'Consumer Discretionary', 'TGT': 'Consumer Discretionary',
+    'UBER': 'Consumer Discretionary', 'LYFT': 'Consumer Discretionary',
+    'DASH': 'Consumer Discretionary', 'ETSY': 'Consumer Discretionary',
+    'CVNA': 'Consumer Discretionary', 'ABNB': 'Consumer Discretionary',
+    'BKNG': 'Consumer Discretionary', 'EXPE': 'Consumer Discretionary',
+    'RCL': 'Consumer Discretionary', 'CCL': 'Consumer Discretionary',
+    'F': 'Consumer Discretionary', 'GM': 'Consumer Discretionary',
+    # Consumer Staples
+    'WMT': 'Consumer Staples', 'COST': 'Consumer Staples',
+    # Communication Services
+    'GOOGL': 'Communication', 'META': 'Communication', 'NFLX': 'Communication',
+    'DIS': 'Communication', 'CMCSA': 'Communication', 'T': 'Communication',
+    'VZ': 'Communication', 'TMUS': 'Communication', 'CHTR': 'Communication',
+    'SATS': 'Communication', 'ROKU': 'Communication', 'SPOT': 'Communication',
+    'SIRI': 'Communication', 'AMCX': 'Communication', 'FOXA': 'Communication',
+    'PARA': 'Communication', 'WBD': 'Communication', 'NYT': 'Communication',
+    # Industrials
+    'BA': 'Industrials', 'CAT': 'Industrials', 'GE': 'Industrials', 'DE': 'Industrials',
+    'RTX': 'Industrials', 'LMT': 'Industrials', 'NOC': 'Industrials', 'GD': 'Industrials',
+    'HON': 'Industrials', 'MMM': 'Industrials', 'PH': 'Industrials', 'EMR': 'Industrials',
+    'ETN': 'Industrials', 'ITW': 'Industrials', 'CMI': 'Industrials', 'PCAR': 'Industrials',
+    'RSG': 'Industrials', 'WM': 'Industrials',
+    # Energy
+    'XOM': 'Energy', 'CVX': 'Energy', 'COP': 'Energy', 'PSX': 'Energy', 'VLO': 'Energy',
+    'MPC': 'Energy', 'EOG': 'Energy', 'FANG': 'Energy', 'DVN': 'Energy', 'OXY': 'Energy',
+    'APA': 'Energy', 'HES': 'Energy',
+    # Utilities
+    'NEE': 'Utilities', 'DUK': 'Utilities', 'SO': 'Utilities', 'D': 'Utilities',
+    'AEP': 'Utilities', 'EXC': 'Utilities', 'SRE': 'Utilities', 'PEG': 'Utilities',
+    'PCG': 'Utilities', 'ED': 'Utilities',
+}
 
 # ========== PERSISTENCE ==========
 def load_json(path, default):
@@ -73,7 +136,7 @@ def init_session():
         st.session_state.active_trades = data.get("active", [])
         st.session_state.trade_history = data.get("history", [])
     if 'scan' not in st.session_state:
-        st.session_state.scan = load_json(SCAN_FILE, None)  # last scan survives restarts
+        st.session_state.scan = load_json(SCAN_FILE, None)
     if 'closing_trade' not in st.session_state:
         st.session_state.closing_trade = None
     if 'pending_ticker' not in st.session_state:
@@ -100,7 +163,7 @@ account_size = st.sidebar.number_input("Account Size ($)", min_value=100, max_va
 risk_percent = st.sidebar.slider("Risk per Trade (%)", 0.25, 3.0, 1.0, 0.25)
 atr_multiplier = st.sidebar.slider("Initial Stop (ATR x)", 1.0, 3.0, 2.0, 0.5)
 max_heat_pct = st.sidebar.slider("Max Portfolio Heat (%)", 2.0, 10.0, 5.0, 0.5,
-                                 help="Total $ at risk across ALL open trades, as % of account. New plans are vetoed above this.")
+                                 help="Total $ at risk across ALL open trades, as % of account.")
 
 st.sidebar.markdown("---")
 st.sidebar.subheader("🔍 Scanner")
@@ -128,8 +191,7 @@ def fetch_data(ticker, period):
         df = yf.Ticker(ticker).history(period=period)
         if df.empty:
             return None, None, f"No data found for '{ticker}'"
-        info = yf.Ticker(ticker).info
-        return add_indicators(df), info, None
+        return add_indicators(df), {'sector': SECTOR_MAP.get(ticker, 'Unknown')}, None
     except Exception as e:
         return None, None, str(e)
 
@@ -148,34 +210,12 @@ def get_news(ticker):
 # ========== UNIVERSE ==========
 @st.cache_data(ttl=3600)
 def get_stock_universe():
-    return [
-        'AAPL', 'MSFT', 'GOOGL', 'AMZN', 'NVDA', 'META', 'TSLA', 'NFLX', 'AMD', 'INTC',
-        'ORCL', 'IBM', 'CSCO', 'QCOM', 'TXN', 'AVGO', 'MU', 'LRCX', 'KLAC', 'AMAT',
-        'JPM', 'BAC', 'WFC', 'C', 'GS', 'MS', 'V', 'MA', 'PYPL', 'XYZ',
-        'AXP', 'COF', 'DFS', 'SYF', 'ALLY', 'USB', 'PNC', 'TFC', 'MTB', 'FITB',
-        'JNJ', 'PFE', 'MRK', 'ABBV', 'UNH', 'CVS', 'ABT', 'TMO', 'DHR', 'AMGN',
-        'GILD', 'BMY', 'REGN', 'VRTX', 'BIIB', 'ILMN', 'MTD', 'WST', 'ZBH', 'SYK',
-        'WMT', 'TGT', 'COST', 'HD', 'LOW', 'MCD', 'SBUX', 'NKE', 'DIS', 'CMCSA',
-        'UBER', 'LYFT', 'DASH', 'ETSY', 'CVNA', 'ABNB', 'BKNG', 'EXPE', 'RCL', 'CCL',
-        'BA', 'CAT', 'GE', 'DE', 'F', 'GM', 'RTX', 'LMT', 'NOC', 'GD',
-        'HON', 'MMM', 'PH', 'EMR', 'ETN', 'ITW', 'CMI', 'PCAR', 'RSG', 'WM',
-        'XOM', 'CVX', 'COP', 'PSX', 'VLO', 'MPC', 'EOG', 'FANG',
-        'DVN', 'OXY', 'APA', 'HES', 'T', 'VZ', 'TMUS', 'CHTR', 'SATS',
-        'ROKU', 'SPOT', 'SIRI', 'AMCX', 'FOXA', 'PARA', 'WBD', 'NYT',
-        'NEE', 'DUK', 'SO', 'D', 'AEP', 'EXC', 'SRE', 'PEG', 'PCG', 'ED',
-        'PLTR', 'SNOW', 'DDOG', 'MDB', 'ZS', 'NET', 'CRWD', 'PANW', 'FTNT', 'OKTA',
-        'SMCI', 'DELL', 'HPQ', 'WDC', 'STX', 'NTAP', 'PSTG', 'AFRM', 'UPST', 'SOFI',
-        'HOOD', 'COIN', 'RIOT', 'MARA', 'HUT'
-    ]
+    return list(SECTOR_MAP.keys())
 
-# ========== PORTFOLIO STATE HELPERS ==========
+# ========== PORTFOLIO HELPERS ==========
 def portfolio_heat():
-    """Total $ currently at risk across open trades (entry - stop) * shares."""
-    heat = 0.0
-    for t in st.session_state.active_trades:
-        risk = max(t['entry_price'] - t['stop_price'], 0) * t['shares']
-        heat += risk
-    return heat
+    return sum(max(t['entry_price'] - t['stop_price'], 0) * t['shares']
+               for t in st.session_state.active_trades)
 
 def sector_counts():
     counts = {}
@@ -187,66 +227,94 @@ def sector_counts():
 def open_tickers():
     return {t['ticker'] for t in st.session_state.active_trades}
 
-# ========== THE DECISION ENGINE ==========
-def run_tracker():
-    """Full nightly routine: regime -> RS scan -> vetoes -> trade plans."""
-    universe = get_stock_universe()
-    errors = []
+# ========== MEMORY-SAFE CHUNKED DOWNLOAD ==========
+def download_chunked(tickers, period="1y"):
+    """Download in small batches, keep only OHLCV as float32, free memory
+    aggressively. This is what keeps Streamlit Cloud from OOM-killing us."""
+    frames, failed = {}, []
+    n_chunks = (len(tickers) + DOWNLOAD_CHUNK - 1) // DOWNLOAD_CHUNK
     status = st.empty()
     prog = st.progress(0)
-
-    # ---- Download everything in one batch (universe + SPY benchmark) ----
-    status.text(f"Downloading {len(universe)} tickers + SPY...")
-    try:
-        raw = yf.download(universe + ['SPY'], period="1y", group_by='ticker',
-                          auto_adjust=True, threads=True, progress=False)
-    except Exception as e:
-        prog.empty(); status.empty()
-        return None, [f"Batch download failed: {e}"]
-
-    # ---- 1. MARKET REGIME (SPY vs 50-day MA) ----
-    try:
-        spy = raw['SPY'].dropna(subset=['Close'])
-        spy_close = float(spy['Close'].iloc[-1])
-        spy_sma50 = float(spy['Close'].rolling(50).mean().iloc[-1])
-        spy_sma200 = float(spy['Close'].rolling(200).mean().iloc[-1])
-        spy_ret_1m = spy_close / float(spy['Close'].iloc[-21]) - 1
-        spy_ret_3m = spy_close / float(spy['Close'].iloc[-63]) - 1
-        if spy_close > spy_sma50 and spy_close > spy_sma200:
-            regime = "GREEN"
-        elif spy_close > spy_sma200:
-            regime = "YELLOW"
-        else:
-            regime = "RED"
-    except Exception as e:
-        prog.empty(); status.empty()
-        return None, [f"SPY regime check failed: {e}"]
-
-    # ---- 2. RELATIVE STRENGTH + SETUP SCORING (fast, price-only) ----
-    rows = []
-    for i, tkr in enumerate(universe):
-        prog.progress((i + 1) / len(universe) * 0.6)
+    for ci in range(n_chunks):
+        chunk = tickers[ci * DOWNLOAD_CHUNK:(ci + 1) * DOWNLOAD_CHUNK]
+        status.text(f"Downloading batch {ci + 1}/{n_chunks} ({chunk[0]}...{chunk[-1]})")
+        prog.progress((ci + 1) / n_chunks)
         try:
-            if tkr not in raw.columns.get_level_values(0):
-                errors.append(f"{tkr}: no data")
-                continue
-            hist = raw[tkr].dropna(subset=['Close'])
-            if len(hist) < 130:
-                errors.append(f"{tkr}: insufficient history")
-                continue
+            raw = yf.download(chunk, period=period, group_by='ticker',
+                              auto_adjust=True, threads=True, progress=False)
+        except Exception as e:
+            failed.extend(f"{t}: batch download failed ({e})" for t in chunk)
+            continue
+        for t in chunk:
+            try:
+                if isinstance(raw.columns, pd.MultiIndex):
+                    if t not in raw.columns.get_level_values(0):
+                        failed.append(f"{t}: no data returned")
+                        continue
+                    df = raw[t]
+                else:
+                    df = raw  # single-ticker chunk edge case
+                df = df[['Open', 'High', 'Low', 'Close', 'Volume']].dropna(subset=['Close'])
+                if df.empty or len(df) < 130:
+                    failed.append(f"{t}: insufficient history")
+                    continue
+                frames[t] = df.astype('float32')
+            except Exception as e:
+                failed.append(f"{t}: {e}")
+        del raw
+        gc.collect()
+        time.sleep(0.2)  # be polite to Yahoo between batches
+    status.empty()
+    prog.empty()
+    return frames, failed
+
+# ========== THE DECISION ENGINE ==========
+def run_tracker():
+    """Regime -> RS scan -> vetoes -> trade plans. Fully wrapped so any
+    failure surfaces in the app instead of killing the container."""
+    try:
+        return _run_tracker_inner()
+    except Exception:
+        return None, [f"Engine crashed:\n{traceback.format_exc()}"]
+
+def _run_tracker_inner():
+    universe = get_stock_universe()
+    frames, errors = download_chunked(universe + ['SPY'])
+
+    # ---- 1. MARKET REGIME ----
+    if 'SPY' not in frames:
+        return None, errors + ["SPY download failed — cannot determine regime"]
+    spy = frames.pop('SPY')
+    spy_close = float(spy['Close'].iloc[-1])
+    spy_sma50 = float(spy['Close'].rolling(50).mean().iloc[-1])
+    spy_sma200 = float(spy['Close'].rolling(200).mean().iloc[-1])
+    spy_ret_1m = spy_close / float(spy['Close'].iloc[-21]) - 1
+    spy_ret_3m = spy_close / float(spy['Close'].iloc[-63]) - 1
+    if spy_close > spy_sma50 and spy_close > spy_sma200:
+        regime = "GREEN"
+    elif spy_close > spy_sma200:
+        regime = "YELLOW"
+    else:
+        regime = "RED"
+    del spy
+    gc.collect()
+
+    # ---- 2. RS + SETUP SCORING (price data only, no network) ----
+    status = st.empty()
+    status.text("Scoring relative strength & setups...")
+    rows = []
+    for tkr, hist in frames.items():
+        try:
             hist = add_indicators(hist)
             latest = hist.iloc[-1]
             close = float(latest['Close'])
-            if close < 5:  # skip illiquid penny-ish names
+            if close < 5:
                 continue
 
-            # Relative strength vs SPY (the core momentum factor)
             ret_1m = close / float(hist['Close'].iloc[-21]) - 1
             ret_3m = close / float(hist['Close'].iloc[-63]) - 1
             rs_raw = 0.4 * (ret_1m - spy_ret_1m) + 0.6 * (ret_3m - spy_ret_3m)
 
-            # Setup quality (0-100): trend alignment, healthy RSI,
-            # buyable pullback (near 20MA, not extended), tradeable ATR
             sma20, sma50, sma200 = latest['SMA_20'], latest['SMA_50'], latest['SMA_200']
             rsi, atr = latest['RSI'], latest['ATR']
             if pd.isna(sma50) or pd.isna(rsi) or pd.isna(atr) or atr <= 0:
@@ -261,136 +329,130 @@ def run_tracker():
             if not pd.isna(sma200) and close > sma200:
                 setup += 15
             if 40 <= rsi <= 68:
-                setup += 20          # strong but not overbought
+                setup += 20
             elif 30 <= rsi < 40:
                 setup += 8
             ext = (close - sma20) / sma20 if sma20 else 0
             if -0.02 <= ext <= 0.05:
-                setup += 20          # near the 20MA = low-risk entry point
+                setup += 20
             elif ext <= 0.10:
-                setup += 8           # somewhat extended
+                setup += 8
             atr_pct = atr / close
             if 0.015 <= atr_pct <= 0.06:
-                setup += 10          # enough movement to pay, not chaos
+                setup += 10
             vol_ma = latest['Volume_MA']
             if vol_ma and vol_ma > 0 and latest['Volume'] > 1.2 * vol_ma:
                 setup += 10
 
-            prior_high = float(hist['High'].iloc[-1])
             rows.append({
-                'ticker': tkr, 'close': close, 'rs_raw': rs_raw,
+                'ticker': tkr, 'close': close, 'rs_raw': float(rs_raw),
                 'setup': min(setup, 100), 'rsi': float(rsi), 'atr': float(atr),
-                'prior_high': prior_high,
-                'ret_1m': ret_1m, 'ret_3m': ret_3m,
+                'prior_high': float(hist['High'].iloc[-1]),
+                'ret_1m': float(ret_1m), 'ret_3m': float(ret_3m),
             })
         except Exception as e:
             errors.append(f"{tkr}: {e}")
+    frames.clear()
+    gc.collect()
+    status.empty()
 
     if not rows:
-        prog.empty(); status.empty()
         return None, errors + ["No tickers survived scoring"]
 
-    # Percentile-rank RS across the universe -> smooth 0-100 distribution
     dfp = pd.DataFrame(rows)
     dfp['rs_pct'] = dfp['rs_raw'].rank(pct=True) * 100
     dfp['composite'] = 0.55 * dfp['rs_pct'] + 0.45 * dfp['setup']
     dfp = dfp.sort_values('composite', ascending=False).reset_index(drop=True)
 
-    # ---- 3. VETO PIPELINE + TRADE PLANS (slow .info only for top names) ----
+    # ---- 3. VETO PIPELINE + PLANS (earnings .info fetched LAZILY) ----
     plans, vetoed, ranking = [], [], []
     heat_available = account_size * (max_heat_pct / 100) - portfolio_heat()
     sec_counts = sector_counts()
     held = open_tickers()
     slots_left = MAX_POSITIONS - len(st.session_state.active_trades)
+    earnings_checks = 0
 
-    top = dfp.head(MAX_INFO_FETCHES)
-    for j, row in top.iterrows():
+    status = st.empty()
+    for j, row in dfp.head(30).iterrows():
         tkr = row['ticker']
-        status.text(f"Vetting {j+1}/{len(top)}: {tkr}")
-        prog.progress(0.6 + (j + 1) / len(top) * 0.4)
-        try:
-            info = yf.Ticker(tkr).info or {}
-        except Exception:
-            info = {}
-        sector = info.get('sector', 'Unknown')
+        sector = SECTOR_MAP.get(tkr, 'Unknown')
 
-        # --- Build the raw plan first ---
-        entry = round(row['prior_high'] * ENTRY_BUFFER, 2)   # buy-stop trigger
-        stop_dist = row['atr'] * atr_multiplier
-        stop_dist = min(max(stop_dist, entry * 0.01), entry * 0.15)
-        stop = round(entry - stop_dist, 2)
-        target = round(entry + 2 * stop_dist, 2)             # 2R target
-        risk_dollars = account_size * (risk_percent / 100)
-        shares = int(risk_dollars / stop_dist) if stop_dist > 0 else 0
-        # position value cap
-        max_shares_by_value = int((account_size * MAX_POSITION_PCT) / entry)
-        capped = shares > max_shares_by_value
-        shares = min(shares, max_shares_by_value)
-        actual_risk = round(shares * stop_dist, 2)
-
-        rank_entry = {
+        ranking.append({
             'Ticker': tkr, 'Sector': sector, 'Price': round(row['close'], 2),
             'RS %ile': round(row['rs_pct']), 'Setup': round(row['setup']),
             'Composite': round(row['composite']), 'RSI': round(row['rsi'], 1),
             '1M vs SPY': f"{(row['ret_1m'] - spy_ret_1m) * 100:+.1f}%",
             '3M vs SPY': f"{(row['ret_3m'] - spy_ret_3m) * 100:+.1f}%",
-        }
-        ranking.append(rank_entry)
+        })
 
-        # --- Veto checks (in order of severity) ---
-        veto_reason = None
-        if regime == "RED":
-            veto_reason = "Regime RED — no new longs"
-        elif tkr in held:
-            veto_reason = "Already holding"
-        elif slots_left - len(plans) <= 0:
-            veto_reason = f"Max positions ({MAX_POSITIONS}) reached"
-        elif sec_counts.get(sector, 0) + sum(1 for p in plans if p['sector'] == sector) >= MAX_PER_SECTOR:
-            veto_reason = f"Sector cap: already {MAX_PER_SECTOR} in {sector}"
-        else:
-            ts = info.get('earningsTimestamp')
-            if ts:
-                try:
-                    days_to_earnings = (datetime.fromtimestamp(ts) - datetime.now()).days
-                    if 0 <= days_to_earnings <= EARNINGS_VETO_DAYS:
-                        veto_reason = f"Earnings in {days_to_earnings}d (gap risk)"
-                except (ValueError, OSError, OverflowError):
-                    pass
-        if veto_reason is None and actual_risk > heat_available - sum(p['risk'] for p in plans):
-            veto_reason = f"Portfolio heat cap ({max_heat_pct}%) would be exceeded"
-        if veto_reason is None and shares < 1:
-            veto_reason = "Position sizes to < 1 share"
-        if veto_reason is None and row['setup'] < 40:
-            veto_reason = "Setup quality too low (extended/broken chart)"
-
-        if veto_reason:
-            vetoed.append({'Ticker': tkr, 'Composite': round(row['composite']),
-                           'Reason': veto_reason})
+        if len(plans) >= top_n_plans:
             continue
 
-        if len(plans) < top_n_plans:
-            ts = info.get('earningsTimestamp')
-            days_to_earn = None
-            if ts:
-                try:
-                    days_to_earn = (datetime.fromtimestamp(ts) - datetime.now()).days
-                except (ValueError, OSError, OverflowError):
-                    pass
-            plans.append({
-                'ticker': tkr, 'sector': sector,
-                'composite': round(row['composite']), 'rs_pct': round(row['rs_pct']),
-                'setup': round(row['setup']),
-                'last_close': round(row['close'], 2),
-                'entry': entry, 'stop': stop, 'target': target,
-                'shares': shares, 'risk': actual_risk,
-                'position_value': round(shares * entry, 2),
-                'rr': 2.0, 'atr': round(row['atr'], 2),
-                'days_to_earnings': days_to_earn,
-                'value_capped': capped,
-            })
-        time.sleep(0.05)
+        # Build the plan
+        entry = round(row['prior_high'] * ENTRY_BUFFER, 2)
+        stop_dist = row['atr'] * atr_multiplier
+        stop_dist = min(max(stop_dist, entry * 0.01), entry * 0.15)
+        stop = round(entry - stop_dist, 2)
+        target = round(entry + 2 * stop_dist, 2)
+        risk_dollars = account_size * (risk_percent / 100)
+        shares = int(risk_dollars / stop_dist) if stop_dist > 0 else 0
+        max_shares_by_value = int((account_size * MAX_POSITION_PCT) / entry)
+        capped = shares > max_shares_by_value
+        shares = min(shares, max_shares_by_value)
+        actual_risk = round(shares * stop_dist, 2)
 
-    prog.empty(); status.empty()
+        # Cheap local vetoes first (no network)
+        veto = None
+        if regime == "RED":
+            veto = "Regime RED — no new longs"
+        elif tkr in held:
+            veto = "Already holding"
+        elif slots_left - len(plans) <= 0:
+            veto = f"Max positions ({MAX_POSITIONS}) reached"
+        elif sec_counts.get(sector, 0) + sum(1 for p in plans if p['sector'] == sector) >= MAX_PER_SECTOR:
+            veto = f"Sector cap: {MAX_PER_SECTOR} in {sector}"
+        elif row['setup'] < 40:
+            veto = "Setup quality too low (extended/broken)"
+        elif shares < 1:
+            veto = "Position sizes to < 1 share"
+        elif actual_risk > heat_available - sum(p['risk'] for p in plans):
+            veto = f"Portfolio heat cap ({max_heat_pct}%) exceeded"
+
+        # Only NOW spend a slow .info call — solely for the earnings date
+        days_to_earn = None
+        if veto is None and earnings_checks < MAX_EARNINGS_CHECKS:
+            status.text(f"Checking earnings date: {tkr}")
+            earnings_checks += 1
+            try:
+                info = yf.Ticker(tkr).info or {}
+                ts = info.get('earningsTimestamp')
+                if ts:
+                    days_to_earn = (datetime.fromtimestamp(ts) - datetime.now()).days
+                    if 0 <= days_to_earn <= EARNINGS_VETO_DAYS:
+                        veto = f"Earnings in {days_to_earn}d (gap risk)"
+                del info
+            except Exception:
+                pass  # earnings unknown — allow, but flag below
+            gc.collect()
+
+        if veto:
+            vetoed.append({'Ticker': tkr, 'Composite': round(row['composite']),
+                           'Reason': veto})
+            continue
+
+        plans.append({
+            'ticker': tkr, 'sector': sector,
+            'composite': round(row['composite']), 'rs_pct': round(row['rs_pct']),
+            'setup': round(row['setup']),
+            'last_close': round(row['close'], 2),
+            'entry': entry, 'stop': stop, 'target': target,
+            'shares': shares, 'risk': actual_risk,
+            'position_value': round(shares * entry, 2),
+            'rr': 2.0, 'atr': round(row['atr'], 2),
+            'days_to_earnings': days_to_earn,
+            'value_capped': capped,
+        })
+    status.empty()
 
     payload = {
         'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M'),
@@ -404,36 +466,40 @@ def run_tracker():
 
 # ========== EXIT MANAGEMENT ENGINE ==========
 def exit_actions():
-    """Evaluate every open trade against the exit rules. Returns
-    (per-trade action dicts keyed by trade id)."""
     actions = {}
     tickers = list(open_tickers())
     if not tickers:
         return actions
     try:
-        px = yf.download(tickers, period="3mo", auto_adjust=True,
-                         threads=True, progress=False)
+        px = yf.download(tickers, period="3mo", group_by='ticker',
+                         auto_adjust=True, threads=True, progress=False)
     except Exception:
         return actions
 
     for t in st.session_state.active_trades:
         tkr = t['ticker']
         try:
-            if len(tickers) == 1:
-                hist = px.dropna(subset=['Close'])
+            if isinstance(px.columns, pd.MultiIndex):
+                if tkr not in px.columns.get_level_values(0):
+                    continue
+                hist = px[tkr].dropna(subset=['Close'])
             else:
-                hist = px.xs(tkr, axis=1, level=0).dropna(subset=['Close']) \
-                    if isinstance(px.columns, pd.MultiIndex) else px
+                hist = px.dropna(subset=['Close'])
             if hist.empty:
                 continue
+            # tz-naive index so date comparisons never raise
+            if hist.index.tz is not None:
+                hist = hist.copy()
+                hist.index = hist.index.tz_localize(None)
+
             current = float(hist['Close'].iloc[-1])
             entry_dt = datetime.strptime(t['entry_date'], '%Y-%m-%d')
             since_entry = hist[hist.index >= pd.Timestamp(entry_dt)]
             highest_close = float(since_entry['Close'].max()) if not since_entry.empty else current
-            atr_now = ta.volatility.AverageTrueRange(
+            atr_series = ta.volatility.AverageTrueRange(
                 hist['High'], hist['Low'], hist['Close'], window=14
-            ).average_true_range().iloc[-1]
-            atr_now = float(atr_now) if not pd.isna(atr_now) else None
+            ).average_true_range()
+            atr_now = float(atr_series.iloc[-1]) if not pd.isna(atr_series.iloc[-1]) else None
 
             entry = t['entry_price']
             stop = t['stop_price']
@@ -451,21 +517,19 @@ def exit_actions():
                 acts.append(f"🎯 TARGET HIT (+{r_mult:.1f}R) — take profit, or sell half & trail the rest")
                 urgency = "success"
             else:
-                # breakeven move
                 if r_mult >= 1.0 and stop < entry:
                     acts.append(f"⬆️ +1R reached — raise stop to breakeven (${entry:.2f})")
                     urgency = "warning"
-                # chandelier trail
                 if atr_now:
                     chandelier = round(highest_close - TRAIL_ATR_MULT * atr_now, 2)
                     if chandelier > stop and chandelier < current:
-                        acts.append(f"⬆️ Trail stop to ${chandelier:.2f} (chandelier: high ${highest_close:.2f} − {TRAIL_ATR_MULT}×ATR)")
+                        acts.append(f"⬆️ Trail stop to ${chandelier:.2f} (high ${highest_close:.2f} − {TRAIL_ATR_MULT}×ATR)")
                         if urgency == "info":
                             urgency = "warning"
-                # time stop
                 if days_held >= TIME_STOP_DAYS and r_mult < 0.5:
                     acts.append(f"⏱️ Day {days_held}, only {r_mult:+.1f}R — time stop: exit & free the capital")
-                    urgency = "warning" if urgency == "info" else urgency
+                    if urgency == "info":
+                        urgency = "warning"
 
             actions[t['id']] = {
                 'current': current, 'r_mult': r_mult, 'days_held': days_held,
@@ -477,6 +541,8 @@ def exit_actions():
             }
         except Exception:
             continue
+    del px
+    gc.collect()
     return actions
 
 # ========== TABS ==========
@@ -500,7 +566,7 @@ with tab1:
                     help="Regime check → RS scan → vetoes → tonight's trade plans")
 
     if run:
-        with st.spinner("Running the full decision engine..."):
+        with st.spinner("Running the decision engine..."):
             payload, errors = run_tracker()
             if payload:
                 st.session_state.scan = payload
@@ -510,21 +576,19 @@ with tab1:
     if scan:
         st.caption(f"Last run: {scan['timestamp']}")
 
-        # ---- REGIME BANNER ----
         regime = scan['regime']
         spy = scan['spy']
         if regime == "GREEN":
             st.success(f"🟢 **REGIME: GREEN** — SPY ${spy['close']} above 50-day (${spy['sma50']}) and 200-day (${spy['sma200']}). New longs allowed.")
         elif regime == "YELLOW":
-            st.warning(f"🟡 **REGIME: YELLOW** — SPY ${spy['close']} below 50-day (${spy['sma50']}) but above 200-day (${spy['sma200']}). Caution: smaller size, A+ setups only.")
+            st.warning(f"🟡 **REGIME: YELLOW** — SPY ${spy['close']} below 50-day (${spy['sma50']}) but above 200-day (${spy['sma200']}). Smaller size, A+ setups only.")
         else:
             st.error(f"🔴 **REGIME: RED** — SPY ${spy['close']} below 200-day (${spy['sma200']}). No new longs. Manage exits and wait.")
 
-        # ---- TONIGHT'S TRADE PLANS ----
         st.subheader("📋 Tonight's Trade Plans")
         plans = scan.get('plans', [])
         if plans:
-            st.caption("Place these as **buy-stop orders** in Fidelity. If price never hits the trigger, the trade never happens — that's the point (momentum confirmation).")
+            st.caption("Place these as **buy-stop orders** in Fidelity. If price never hits the trigger, the trade never happens — that's momentum confirmation working.")
             for plan in plans:
                 with st.container(border=True):
                     h1, h2 = st.columns([3, 1])
@@ -533,7 +597,7 @@ with tab1:
                         st.caption(f"Composite {plan['composite']} (RS %ile {plan['rs_pct']} · Setup {plan['setup']}) · Last close ${plan['last_close']}")
                     with h2:
                         earn = plan.get('days_to_earnings')
-                        st.caption(f"Earnings: {'in ' + str(earn) + 'd' if earn is not None else 'none near'}")
+                        st.caption(f"Earnings: {'in ' + str(earn) + 'd' if earn is not None else 'unknown/none near'}")
 
                     p1, p2, p3, p4, p5, p6 = st.columns(6)
                     p1.metric("🎯 Buy Stop", f"${plan['entry']:.2f}")
@@ -543,7 +607,7 @@ with tab1:
                     p5.metric("💵 Position", f"${plan['position_value']:,.0f}")
                     p6.metric("⚠️ Risk", f"${plan['risk']:,.0f}")
                     if plan.get('value_capped'):
-                        st.caption(f"ℹ️ Shares capped at {MAX_POSITION_PCT*100:.0f}% of account — actual risk is below your {risk_percent}% budget.")
+                        st.caption(f"ℹ️ Shares capped at {MAX_POSITION_PCT*100:.0f}% of account — actual risk is below budget.")
 
                     if st.button(f"✅ I placed this order — track {plan['ticker']}",
                                  key=f"take_{plan['ticker']}"):
@@ -561,31 +625,28 @@ with tab1:
                             'status': 'ACTIVE'
                         })
                         save_trades()
-                        st.success(f"{plan['ticker']} added — exit engine will manage it from here.")
+                        st.success(f"{plan['ticker']} added — exit engine will manage it.")
                         st.rerun()
         elif regime == "RED":
             st.info("No plans — regime is RED. The best trade is no trade.")
         else:
-            st.info("No setups passed the veto pipeline tonight. That's normal — the system says no more often than yes.")
+            st.info("No setups passed the veto pipeline tonight. Normal — the system says no more often than yes.")
 
-        # ---- RANKING TABLE ----
         with st.expander("📊 Full Ranking (top 25 by composite)"):
             if scan.get('ranking'):
                 st.dataframe(pd.DataFrame(scan['ranking']), hide_index=True,
                              use_container_width=True)
 
-        # ---- VETOED ----
         vetoed = scan.get('vetoed', [])
         if vetoed:
-            with st.expander(f"🚫 Vetoed Candidates ({len(vetoed)}) — high scores that failed a safety rule"):
+            with st.expander(f"🚫 Vetoed Candidates ({len(vetoed)})"):
                 st.dataframe(pd.DataFrame(vetoed), hide_index=True,
                              use_container_width=True)
-
     else:
         st.info("Hit **Run Tracker** to generate tonight's trade plans.")
 
     if st.session_state.get('scan_errors'):
-        with st.expander(f"⚠️ {len(st.session_state.scan_errors)} tickers skipped"):
+        with st.expander(f"⚠️ {len(st.session_state.scan_errors)} issues during scan"):
             for err in st.session_state.scan_errors:
                 st.caption(err)
 
@@ -633,7 +694,6 @@ with tab2:
         with st.spinner("Evaluating exit rules..."):
             actions = exit_actions()
 
-        # ---- ACTION LIST (the things you actually need to DO) ----
         todo = [(t, actions.get(t['id'])) for t in st.session_state.active_trades
                 if actions.get(t['id']) and actions[t['id']]['actions']]
         if todo:
@@ -677,7 +737,6 @@ with tab2:
                 c6.metric("Days", days_held)
                 st.caption(f"Target: ${trade['target_price']:.2f} · Initial stop: ${trade.get('initial_stop', trade['stop_price']):.2f} · Shares: {trade['shares']:,}")
 
-                # one-click stop updates suggested by the exit engine
                 sugg = a.get('suggested_stops', {})
                 bcols = st.columns(4)
                 with bcols[0]:
@@ -720,7 +779,7 @@ with tab2:
                                 'notes': notes, 'status': 'CLOSED'
                             })
                             st.session_state.active_trades = [
-                                t for t in st.session_state.active_trades if t['id'] != trade['id']
+                                x for x in st.session_state.active_trades if x['id'] != trade['id']
                             ]
                             st.session_state.closing_trade = None
                             save_trades()
@@ -748,7 +807,8 @@ with tab3:
                 m_notes = st.text_area("Notes")
             if st.form_submit_button("Add Trade"):
                 st.session_state.active_trades.append({
-                    'id': str(uuid.uuid4()), 'ticker': m_tkr, 'sector': 'Unknown',
+                    'id': str(uuid.uuid4()), 'ticker': m_tkr,
+                    'sector': SECTOR_MAP.get(m_tkr, 'Unknown'),
                     'entry_date': datetime.now().strftime('%Y-%m-%d'),
                     'entry_price': m_entry, 'shares': m_shares,
                     'stop_price': m_stop, 'initial_stop': m_stop,
