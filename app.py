@@ -125,6 +125,50 @@ def fetch_data(ticker, period):
     except Exception as e:
         return None, None, str(e)
 
+# ========== GET SIGNALS (FIXED) ==========
+def get_signals(df):
+    if df is None or len(df) < 20:
+        return ["Not enough data"], "NEUTRAL", 0
+    
+    latest = df.iloc[-1]
+    signals = []
+    score = 0
+    
+    if not pd.isna(latest['RSI']):
+        if latest['RSI'] < 30:
+            signals.append("🟢 RSI Oversold (<30) - BUY Signal")
+            score += 1
+        elif latest['RSI'] > 70:
+            signals.append("🔴 RSI Overbought (>70) - SELL Signal")
+            score -= 1
+        else:
+            signals.append(f"⚪ RSI: {latest['RSI']:.1f}")
+    
+    if not pd.isna(latest['SMA_50']):
+        if latest['Close'] > latest['SMA_50']:
+            signals.append("🟢 Above 50-day MA - Uptrend")
+            score += 1
+        else:
+            signals.append("🔴 Below 50-day MA - Downtrend")
+            score -= 1
+    
+    if not pd.isna(latest['MACD']) and not pd.isna(latest['MACD_Signal']):
+        if latest['MACD'] > latest['MACD_Signal']:
+            signals.append("🟢 MACD Bullish Crossover")
+            score += 1
+        else:
+            signals.append("🔴 MACD Bearish Crossover")
+            score -= 1
+    
+    if score >= 2:
+        rec = "🟢 BUY"
+    elif score <= -2:
+        rec = "🔴 SELL"
+    else:
+        rec = "⚪ HOLD"
+    
+    return signals, rec, score
+
 # ========== GET STOCK UNIVERSE (EXPANDED) ==========
 @st.cache_data(ttl=3600)
 def get_stock_universe():
@@ -165,11 +209,9 @@ def get_stock_universe():
         'PLTR', 'SNOW', 'DDOG', 'MDB', 'ZS', 'NET', 'CRWD', 'PANW', 'FTNT', 'OKTA',
         'TEAM', 'WORK', 'ASAN', 'WDAY', 'CRM', 'NOW', 'ADSK', 'ADBE', 'ANSS', 'ROP',
         
-        # Small/Mid Caps (40)
+        # Small/Mid Caps (20)
         'SMCI', 'DELL', 'HPQ', 'WDC', 'STX', 'NTAP', 'PSTG', 'PURE', 'NMBL', 'VERI',
-        'AFRM', 'UPST', 'SOFI', 'HOOD', 'COIN', 'RIOT', 'MARA', 'SI', 'GLXY', 'HUT',
-        'BTBT', 'CIFR', 'CLSK', 'IREN', 'APLD', 'CORZ', 'CSPR', 'WULF', 'ANY', 'SDIG',
-        'MIGI', 'REBN', 'FRHC', 'IX', 'WLFC', 'ALGT', 'FLXS', 'HSY', 'FIZZ', 'CELH'
+        'AFRM', 'UPST', 'SOFI', 'HOOD', 'COIN', 'RIOT', 'MARA', 'SI', 'GLXY', 'HUT'
     ]
 
 # ========== GET NEWS (BASIC) ==========
@@ -257,6 +299,35 @@ def calculate_fundamental_score(info):
             score += 3
     
     return min(score, 100)
+
+# ========== POSITION SIZING ==========
+def calc_position(price, atr, account, risk_pct, atr_mult):
+    risk_dollars = account * (risk_pct / 100)
+    stop_distance = atr * atr_mult
+    
+    if stop_distance < price * 0.01:
+        stop_distance = price * 0.01
+    
+    shares = risk_dollars / stop_distance
+    
+    if shares < 1:
+        shares = round(shares, 2)
+    else:
+        shares = int(shares)
+    
+    stop_price = price - stop_distance
+    target_price = price + (stop_distance * 2)
+    
+    if stop_price < price * 0.85:
+        stop_price = price * 0.85
+        stop_distance = price - stop_price
+        shares = risk_dollars / stop_distance
+        if shares < 1:
+            shares = round(shares, 2)
+        else:
+            shares = int(shares)
+    
+    return shares, stop_price, target_price, risk_dollars
 
 # ========== PRO SCANNER ==========
 def pro_scan():
@@ -410,35 +481,6 @@ def pro_scan():
     # Sort by Total Score (descending)
     results = sorted(results, key=lambda x: x['Total Score'], reverse=True)
     return results
-
-# ========== POSITION SIZING ==========
-def calc_position(price, atr, account, risk_pct, atr_mult):
-    risk_dollars = account * (risk_pct / 100)
-    stop_distance = atr * atr_mult
-    
-    if stop_distance < price * 0.01:
-        stop_distance = price * 0.01
-    
-    shares = risk_dollars / stop_distance
-    
-    if shares < 1:
-        shares = round(shares, 2)
-    else:
-        shares = int(shares)
-    
-    stop_price = price - stop_distance
-    target_price = price + (stop_distance * 2)
-    
-    if stop_price < price * 0.85:
-        stop_price = price * 0.85
-        stop_distance = price - stop_price
-        shares = risk_dollars / stop_distance
-        if shares < 1:
-            shares = round(shares, 2)
-        else:
-            shares = int(shares)
-    
-    return shares, stop_price, target_price, risk_dollars
 
 # ========== TAB 1: PRO SCANNER ==========
 with tab1:
@@ -743,39 +785,4 @@ with tab3:
         
         for trade in st.session_state.trade_history[::-1]:
             ticker = trade['ticker']
-            entry_date = trade['entry_date']
-            entry_price = trade['entry_price']
-            exit_date = trade['exit_date']
-            exit_price = trade['exit_price']
-            shares = trade['shares']
-            pnl = trade['pnl']
-            notes = trade['notes']
-            
-            with st.container():
-                col1, col2, col3, col4 = st.columns([2, 1, 1, 2])
-                with col1:
-                    st.subheader(ticker)
-                    st.caption(f"Entry: {entry_date} | Exit: {exit_date if exit_date else 'Open'}")
-                with col2:
-                    st.metric("Entry", f"${entry_price:.2f}")
-                    st.metric("Exit", f"${exit_price:.2f}" if exit_price else "-")
-                with col3:
-                    if pnl:
-                        delta_color = "normal" if pnl > 0 else "inverse"
-                        st.metric("P&L", f"${pnl:.2f}", delta_color=delta_color)
-                    else:
-                        st.metric("P&L", "-")
-                with col4:
-                    if notes:
-                        st.caption(f"📝 {notes}")
-                
-                st.markdown("---")
-    else:
-        st.info("No trades logged yet. Start your trading journey!")
-
-# ========== SIDEBAR - QUICK ACTIONS ==========
-st.sidebar.markdown("---")
-st.sidebar.subheader("⚡ Quick Actions")
-
-if st.sidebar.button("🔄 Refresh Data"):
-    st.c
+            entry_date = trade['
