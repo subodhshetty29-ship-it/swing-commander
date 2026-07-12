@@ -6,9 +6,6 @@ from plotly.subplots import make_subplots
 import ta
 from datetime import datetime, timedelta
 import time
-import sqlite3
-import requests
-import json
 
 # ========== PAGE CONFIG ==========
 st.set_page_config(
@@ -17,30 +14,35 @@ st.set_page_config(
     layout="wide"
 )
 
-# ========== INITIALIZE DATABASE ==========
-def init_db():
-    conn = sqlite3.connect('trades.db')
-    c = conn.cursor()
-    c.execute('''
-        CREATE TABLE IF NOT EXISTS trades (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            ticker TEXT,
-            entry_date TEXT,
-            entry_price REAL,
-            shares INTEGER,
-            stop_price REAL,
-            target_price REAL,
-            exit_date TEXT,
-            exit_price REAL,
-            pnl REAL,
-            notes TEXT,
-            status TEXT
-        )
-    ''')
-    conn.commit()
-    conn.close()
+# ========== INITIALIZE SESSION STATE ==========
+def init_session():
+    """Initialize all session state variables"""
+    
+    # Active trades
+    if 'active_trades' not in st.session_state:
+        st.session_state.active_trades = []
+    
+    # Trade history (journal)
+    if 'trade_history' not in st.session_state:
+        st.session_state.trade_history = []
+    
+    # Scanner results
+    if 'scan_results' not in st.session_state:
+        st.session_state.scan_results = []
+    
+    # Quick ticker for analysis
+    if 'quick_ticker' not in st.session_state:
+        st.session_state.quick_ticker = "AAPL"
+    
+    # Closing trade ID
+    if 'closing_trade' not in st.session_state:
+        st.session_state.closing_trade = None
+    
+    # Adding trade flag
+    if 'adding_trade' not in st.session_state:
+        st.session_state.adding_trade = False
 
-init_db()
+init_session()
 
 # ========== SIDEBAR ==========
 st.sidebar.title("⚙️ Settings")
@@ -333,14 +335,15 @@ with tab1:
     if scan_btn:
         with st.spinner("Scanning the entire market..."):
             results = scan_full_market()
+            st.session_state.scan_results = results
         
-        if results:
-            st.success(f"✅ Found {len(results)} top picks from the entire market!")
+        if st.session_state.scan_results:
+            st.success(f"✅ Found {len(st.session_state.scan_results)} top picks from the entire market!")
             st.markdown("---")
             
             # Display top 3 picks as large cards
             cols = st.columns(3)
-            for idx, stock in enumerate(results):
+            for idx, stock in enumerate(st.session_state.scan_results):
                 with cols[idx]:
                     st.subheader(f"🏆 #{idx+1} {stock['Ticker']}")
                     st.metric("💰 Price", f"${stock['Price']}")
@@ -353,7 +356,7 @@ with tab1:
                     
                     # Quick trade button
                     if st.button(f"📈 Analyze {stock['Ticker']}", key=f"quick_{stock['Ticker']}"):
-                        st.session_state['quick_ticker'] = stock['Ticker']
+                        st.session_state.quick_ticker = stock['Ticker']
                         st.rerun()
         else:
             st.warning("No stocks passed the filters today. Try again later or widen the filters.")
@@ -362,12 +365,7 @@ with tab1:
     st.markdown("---")
     
     # ===== INDIVIDUAL STOCK ANALYSIS =====
-    # Check if we have a quick ticker from the scan
-    quick_ticker = st.session_state.get('quick_ticker', ticker)
-    if quick_ticker:
-        analysis_ticker = quick_ticker
-    else:
-        analysis_ticker = ticker
+    analysis_ticker = st.session_state.quick_ticker if st.session_state.quick_ticker else ticker
     
     if analysis_ticker:
         st.subheader(f"📊 {analysis_ticker} Analysis")
@@ -408,11 +406,19 @@ with tab1:
                 
                 # Add to trade button
                 if st.button(f"➕ Add {analysis_ticker} to Active Trades"):
-                    st.session_state['adding_trade'] = analysis_ticker
-                    st.session_state['add_entry'] = latest['Close']
-                    st.session_state['add_stop'] = stop_price
-                    st.session_state['add_target'] = target_price
-                    st.session_state['add_shares'] = shares
+                    # Create new trade
+                    new_trade = {
+                        'id': len(st.session_state.active_trades) + 1,
+                        'ticker': analysis_ticker,
+                        'entry_date': datetime.now().strftime('%Y-%m-%d'),
+                        'entry_price': latest['Close'],
+                        'shares': shares,
+                        'stop_price': stop_price,
+                        'target_price': target_price,
+                        'status': 'ACTIVE'
+                    }
+                    st.session_state.active_trades.append(new_trade)
+                    st.success(f"✅ {analysis_ticker} added to active trades!")
                     st.rerun()
             
             # Signals
@@ -447,19 +453,17 @@ with tab2:
     st.title("📈 Active Trades")
     st.markdown("---")
     
-    conn = sqlite3.connect('trades.db')
-    c = conn.cursor()
-    
-    c.execute('''
-        SELECT id, ticker, entry_date, entry_price, shares, stop_price, target_price, status
-        FROM trades WHERE status = 'ACTIVE'
-    ''')
-    active = c.fetchall()
-    
-    if active:
-        for trade in active:
-            trade_id, ticker, entry_date, entry_price, shares, stop_price, target_price, status = trade
+    if st.session_state.active_trades:
+        for idx, trade in enumerate(st.session_state.active_trades):
+            ticker = trade['ticker']
+            entry_date = trade['entry_date']
+            entry_price = trade['entry_price']
+            shares = trade['shares']
+            stop_price = trade['stop_price']
+            target_price = trade['target_price']
+            trade_id = trade['id']
             
+            # Get current price
             stock = yf.Ticker(ticker)
             hist = stock.history(period="5d")
             if not hist.empty:
@@ -492,24 +496,34 @@ with tab2:
                 
                 col1, col2 = st.columns([1, 4])
                 with col1:
-                    if st.button(f"✅ Close {ticker}", key=f"close_{trade_id}"):
-                        st.session_state['closing_trade'] = trade_id
+                    if st.button(f"✅ Close {ticker}", key=f"close_{idx}"):
+                        st.session_state.closing_trade = idx
                         st.rerun()
                 
                 # Close trade form
-                if st.session_state.get('closing_trade') == trade_id:
-                    with st.form(key=f"close_form_{trade_id}"):
+                if st.session_state.closing_trade == idx:
+                    with st.form(key=f"close_form_{idx}"):
                         exit_price = st.number_input("Exit Price", value=current_price, step=0.01)
                         notes = st.text_area("Notes")
                         submitted = st.form_submit_button("Confirm Close")
                         if submitted:
                             pnl_final = (exit_price - entry_price) * shares
-                            c.execute('''
-                                UPDATE trades SET exit_date = ?, exit_price = ?, pnl = ?, notes = ?, status = 'CLOSED'
-                                WHERE id = ?
-                            ''', (datetime.now().strftime('%Y-%m-%d'), exit_price, pnl_final, notes, trade_id))
-                            conn.commit()
-                            st.session_state['closing_trade'] = None
+                            # Move to history
+                            closed_trade = {
+                                'ticker': ticker,
+                                'entry_date': entry_date,
+                                'entry_price': entry_price,
+                                'exit_date': datetime.now().strftime('%Y-%m-%d'),
+                                'exit_price': exit_price,
+                                'shares': shares,
+                                'pnl': pnl_final,
+                                'notes': notes,
+                                'status': 'CLOSED'
+                            }
+                            st.session_state.trade_history.append(closed_trade)
+                            # Remove from active
+                            st.session_state.active_trades.pop(idx)
+                            st.session_state.closing_trade = None
                             st.success(f"✅ {ticker} closed! P&L: ${pnl_final:.2f}")
                             st.rerun()
                 
@@ -517,55 +531,47 @@ with tab2:
     else:
         st.info("No active trades. Use the scanner to find picks!")
 
-    conn.close()
-
 # ========== TAB 3: JOURNAL ==========
 with tab3:
     st.title("📓 Trade Journal")
     st.markdown("---")
     
     # Add new trade form
-    with st.expander("➕ Add New Trade", expanded=False):
+    with st.expander("➕ Add New Trade Manually", expanded=False):
         with st.form("new_trade"):
             col1, col2 = st.columns(2)
             with col1:
                 ticker_input = st.text_input("Ticker", value="AAPL").upper()
-                entry_price = st.number_input("Entry Price", min_value=0.01, step=0.01)
-                shares = st.number_input("Shares", min_value=1, step=1)
+                entry_price = st.number_input("Entry Price", min_value=0.01, step=0.01, value=150.00)
+                shares = st.number_input("Shares", min_value=1, step=1, value=100)
             with col2:
-                stop_price = st.number_input("Stop Loss Price", min_value=0.01, step=0.01)
-                target_price = st.number_input("Target Price", min_value=0.01, step=0.01)
+                stop_price = st.number_input("Stop Loss Price", min_value=0.01, step=0.01, value=140.00)
+                target_price = st.number_input("Target Price", min_value=0.01, step=0.01, value=165.00)
                 notes = st.text_area("Notes", placeholder="Why did you enter this trade?")
             
             submitted = st.form_submit_button("Add Trade")
             if submitted:
-                conn = sqlite3.connect('trades.db')
-                c = conn.cursor()
-                c.execute('''
-                    INSERT INTO trades (ticker, entry_date, entry_price, shares, stop_price, target_price, notes, status)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, 'ACTIVE')
-                ''', (ticker_input, datetime.now().strftime('%Y-%m-%d'), entry_price, shares, stop_price, target_price, notes))
-                conn.commit()
-                conn.close()
+                new_trade = {
+                    'id': len(st.session_state.active_trades) + 1,
+                    'ticker': ticker_input,
+                    'entry_date': datetime.now().strftime('%Y-%m-%d'),
+                    'entry_price': entry_price,
+                    'shares': shares,
+                    'stop_price': stop_price,
+                    'target_price': target_price,
+                    'status': 'ACTIVE'
+                }
+                st.session_state.active_trades.append(new_trade)
                 st.success(f"✅ {ticker_input} added to active trades!")
                 st.rerun()
     
     st.subheader("📊 Trade History")
     
-    conn = sqlite3.connect('trades.db')
-    c = conn.cursor()
-    c.execute('''
-        SELECT ticker, entry_date, entry_price, exit_date, exit_price, shares, pnl, notes, status
-        FROM trades ORDER BY id DESC
-    ''')
-    history = c.fetchall()
-    conn.close()
-    
-    if history:
+    if st.session_state.trade_history:
         # Calculate summary stats
-        total_trades = len(history)
-        winning_trades = sum(1 for t in history if t[6] and t[6] > 0)
-        total_pnl = sum(t[6] for t in history if t[6])
+        total_trades = len(st.session_state.trade_history)
+        winning_trades = sum(1 for t in st.session_state.trade_history if t['pnl'] and t['pnl'] > 0)
+        total_pnl = sum(t['pnl'] for t in st.session_state.trade_history if t['pnl'])
         
         col1, col2, col3 = st.columns(3)
         col1.metric("📊 Total Trades", total_trades)
@@ -574,8 +580,16 @@ with tab3:
         
         st.markdown("---")
         
-        for trade in history:
-            ticker, entry_date, entry_price, exit_date, exit_price, shares, pnl, notes, status = trade
+        for trade in st.session_state.trade_history[::-1]:
+            ticker = trade['ticker']
+            entry_date = trade['entry_date']
+            entry_price = trade['entry_price']
+            exit_date = trade['exit_date']
+            exit_price = trade['exit_price']
+            shares = trade['shares']
+            pnl = trade['pnl']
+            notes = trade['notes']
+            status = trade['status']
             
             with st.container():
                 col1, col2, col3, col4 = st.columns([2, 1, 1, 2])
@@ -608,12 +622,8 @@ if st.sidebar.button("🔄 Refresh Data"):
     st.cache_data.clear()
     st.rerun()
 
-conn = sqlite3.connect('trades.db')
-c = conn.cursor()
-c.execute("SELECT COUNT(*) FROM trades WHERE status = 'ACTIVE'")
-active_count = c.fetchone()[0]
-conn.close()
-st.sidebar.caption(f"📊 Active Trades: {active_count}")
+st.sidebar.caption(f"📊 Active Trades: {len(st.session_state.active_trades)}")
+st.sidebar.caption(f"📓 Trades History: {len(st.session_state.trade_history)}")
 
 st.sidebar.markdown("---")
 st.sidebar.caption("🔍 Tip: Run scanner during market hours for best results")
