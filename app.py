@@ -160,42 +160,41 @@ def calc_position(price, atr, account, risk_pct, atr_mult):
     target_price = price + (stop_distance * 2)
     return shares, stop_price, target_price, risk_dollars
 
-# ========== CURATED WATCHLIST (Quality > Quantity) ==========
+# ========== CURATED WATCHLIST ==========
 @st.cache_data(ttl=3600)
 def get_watchlist():
-    """Curated list of 40 high-quality, liquid stocks across sectors"""
     return [
-        # Technology (10)
         'AAPL', 'MSFT', 'GOOGL', 'AMZN', 'NVDA', 'META', 'NFLX', 'AMD', 'ORCL', 'CSCO',
-        # Financials (5)
         'JPM', 'BAC', 'GS', 'V', 'MA',
-        # Healthcare (5)
         'JNJ', 'PFE', 'MRK', 'ABBV', 'UNH',
-        # Consumer (5)
         'WMT', 'COST', 'HD', 'MCD', 'NKE',
-        # Industrials (5)
         'BA', 'CAT', 'GE', 'DE', 'HON',
-        # Energy (5)
         'XOM', 'CVX', 'COP', 'PSX', 'SLB',
-        # Communication (5)
-        'T', 'VZ', 'TMUS', 'CMCSA', 'DIS'
+        'T', 'VZ', 'TMUS', 'CMCSA', 'DIS',
+        'TSLA', 'INTC', 'IBM', 'QCOM', 'TXN'
     ]
 
+# ========== SCANNER ==========
 def scan_watchlist():
-    """Scan the curated watchlist (40 stocks, fast and reliable)"""
     watchlist = get_watchlist()
     results = []
+    
+    # Check if it's weekend
+    is_weekend = datetime.now().weekday() >= 5
     
     for tkr in watchlist:
         try:
             stock = yf.Ticker(tkr)
-            hist = stock.history(period="3mo")
+            hist = stock.history(period="4mo")
             info = stock.info
             
             if hist.empty or len(hist) < 50:
                 continue
             
             latest = hist.iloc[-1]
+            
+            # Get the last 5 days to check for recent trend
+            last_5 = hist.tail(5)
             
             # Calculate indicators
             sma_20 = hist['SMA_20'].iloc[-1]
@@ -205,76 +204,95 @@ def scan_watchlist():
             vol_ma = hist['Volume'].rolling(20).mean().iloc[-1]
             atr = hist['ATR'].iloc[-1] if 'ATR' in hist.columns else None
             
-            if pd.isna(sma_20) or pd.isna(sma_50) or pd.isna(rsi) or pd.isna(vol_ma):
+            if pd.isna(sma_20) or pd.isna(sma_50) or pd.isna(rsi):
                 continue
             
-            # ===== Scoring System =====
+            # ----- SCORING SYSTEM (Simpler, works on weekends) -----
             score = 0
             signals = []
             
-            # 1. Uptrend (Price > 50-day MA)
+            # 1. Price > 50-day MA (Uptrend) - Most important
             if latest['Close'] > sma_50:
-                score += 20
+                score += 30
                 signals.append("Uptrend")
+            else:
+                # Still give points if close to MA
+                if latest['Close'] > sma_50 * 0.97:
+                    score += 15
+                    signals.append("Near MA")
             
-            # 2. Momentum (Price > 20-day MA)
+            # 2. Price > 20-day MA (Short-term momentum)
             if latest['Close'] > sma_20:
                 score += 15
                 signals.append("Momentum")
             
-            # 3. Not overbought (RSI < 70)
-            if rsi < 70:
-                score += 15
-                signals.append("Not Overbought")
-            elif rsi < 80:
-                score += 5
-                signals.append("RSI: " + str(round(rsi)))
+            # 3. RSI sweet spot (30-65) - Not overbought, not oversold
+            if 30 <= rsi <= 65:
+                score += 25
+                signals.append(f"RSI: {round(rsi)}")
+            elif rsi < 70:
+                score += 10
+                signals.append(f"RSI: {round(rsi)}")
             
-            # 4. Volume surge (Volume > 1.2x average)
-            if latest['Volume'] > 1.2 * vol_ma:
-                score += 15
-                signals.append("Volume Surge")
+            # 4. Volume surge - Only check on weekdays
+            if not is_weekend:
+                if vol_ma > 0 and latest['Volume'] > 1.2 * vol_ma:
+                    score += 15
+                    signals.append("Volume Surge")
+                else:
+                    # On weekdays with low volume, still give some points
+                    if latest['Volume'] > vol_ma * 0.8:
+                        score += 5
+            else:
+                # Weekend: Skip volume check, give default points
+                score += 10
+                signals.append("Weekend Mode")
             
-            # 5. RSI sweet spot (40-65)
-            if 40 <= rsi <= 65:
-                score += 20
-                signals.append("RSI Sweet Spot")
+            # 5. Recent price action (last 5 days)
+            if len(last_5) >= 5:
+                # Price is above the average of last 5 days
+                if latest['Close'] > last_5['Close'].mean():
+                    score += 10
+                    signals.append("Recent Strength")
             
-            # 6. Long-term trend (Price > 200-day MA)
+            # 6. Long-term trend
             if not pd.isna(sma_200) and latest['Close'] > sma_200:
-                score += 15
-                signals.append("Long-term Uptrend")
+                score += 10
+                signals.append("Long-term Trend")
             
-            # Only include if score is decent
-            if score >= 50:
+            # Include stocks with score >= 40 (lowered threshold for weekend)
+            if score >= 40:
                 results.append({
                     'Ticker': tkr,
                     'Price': round(latest['Close'], 2),
                     'RSI': round(rsi, 1),
-                    'Volume Surge': round(latest['Volume'] / vol_ma, 1),
-                    'Score': score,
+                    'Volume Surge': round(latest['Volume'] / vol_ma, 1) if vol_ma > 0 else 1.0,
+                    'Score': min(score, 100),
                     'Signals': ' | '.join(signals),
                     'ATR': round(atr, 2) if atr else None
                 })
             
-            # Small delay to avoid rate limiting
-            time.sleep(0.2)
+            time.sleep(0.15)
             
-        except Exception as e:
+        except Exception:
             continue
     
-    # Sort by Score (highest first)
     results = sorted(results, key=lambda x: x['Score'], reverse=True)
-    return results[:5]  # Return top 5
+    return results[:5]
 
 # ========== TAB 1: DASHBOARD ==========
 with tab1:
     st.title("📊 Swing Commander")
     st.markdown("---")
     
-    # ===== SCANNER SECTION =====
     st.subheader("🔍 Scanner")
-    st.caption("Scanning 40 high-quality stocks across all sectors")
+    
+    # Show if it's weekend
+    is_weekend = datetime.now().weekday() >= 5
+    if is_weekend:
+        st.info("📌 Weekend Mode: Volume filter is disabled. This helps find setups on Saturdays and Sundays.")
+    else:
+        st.caption("Scanning 45 high-quality stocks across all sectors")
     
     col1, col2 = st.columns([1, 4])
     with col1:
@@ -289,7 +307,6 @@ with tab1:
             st.success(f"✅ Found {len(st.session_state.scan_results)} setups!")
             st.markdown("---")
             
-            # Display as a table
             df_results = pd.DataFrame(st.session_state.scan_results)
             st.dataframe(
                 df_results,
@@ -306,7 +323,6 @@ with tab1:
                 use_container_width=True
             )
             
-            # Quick analyze buttons
             st.subheader("📈 Quick Analyze")
             cols = st.columns(min(len(results), 5))
             for idx, stock in enumerate(results):
@@ -316,7 +332,8 @@ with tab1:
                             st.session_state.quick_ticker = stock['Ticker']
                             st.rerun()
         else:
-            st.warning("No setups found today. Try again during market hours.")
+            st.warning("No setups found today.")
+            st.caption("💡 Try again during market hours (Monday-Friday, 9:30 AM - 4:00 PM EST)")
     
     st.markdown("---")
     
@@ -330,8 +347,6 @@ with tab1:
         
         if error:
             st.error(f"❌ {error}")
-            if "Too Many Requests" in error:
-                st.info("💡 Yahoo Finance is rate limiting. Wait 60 seconds and try again.")
         else:
             latest = df.iloc[-1]
             prev = df.iloc[-2] if len(df) > 1 else latest
@@ -570,4 +585,8 @@ st.sidebar.caption(f"📊 Active Trades: {len(st.session_state.active_trades)}")
 st.sidebar.caption(f"📓 Trades History: {len(st.session_state.trade_history)}")
 
 st.sidebar.markdown("---")
-st.sidebar.caption("📌 Watchlist: 40 quality stocks across all sectors")
+is_weekend = datetime.now().weekday() >= 5
+if is_weekend:
+    st.sidebar.caption("📌 Weekend Mode: Volume filter disabled")
+else:
+    st.sidebar.caption("📌 Market Hours: 9:30 AM - 4:00 PM EST")
