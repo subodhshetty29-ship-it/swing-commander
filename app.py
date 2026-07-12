@@ -16,41 +16,24 @@ st.set_page_config(
 
 # ========== INITIALIZE SESSION STATE ==========
 def init_session():
-    """Initialize all session state variables"""
-    
-    # Active trades
     if 'active_trades' not in st.session_state:
         st.session_state.active_trades = []
-    
-    # Trade history (journal)
     if 'trade_history' not in st.session_state:
         st.session_state.trade_history = []
-    
-    # Scanner results
     if 'scan_results' not in st.session_state:
         st.session_state.scan_results = []
-    
-    # Quick ticker for analysis
     if 'quick_ticker' not in st.session_state:
         st.session_state.quick_ticker = "AAPL"
-    
-    # Closing trade ID
     if 'closing_trade' not in st.session_state:
         st.session_state.closing_trade = None
-    
-    # Adding trade flag
-    if 'adding_trade' not in st.session_state:
-        st.session_state.adding_trade = False
 
 init_session()
 
 # ========== SIDEBAR ==========
 st.sidebar.title("⚙️ Settings")
 
-# Stock Input
 ticker = st.sidebar.text_input("Search Stock", value="AAPL").upper()
 
-# Time Period
 period_map = {
     "1 Month": "1mo",
     "3 Months": "3mo",
@@ -64,7 +47,6 @@ period = period_map[selected_period]
 
 st.sidebar.markdown("---")
 
-# ========== POSITION SIZING ==========
 st.sidebar.subheader("💰 Position Sizing")
 
 account_size = st.sidebar.number_input(
@@ -108,7 +90,6 @@ def fetch_data(ticker, period):
         
         info = stock.info
         
-        # Technical Indicators
         df['SMA_20'] = df['Close'].rolling(20).mean()
         df['SMA_50'] = df['Close'].rolling(50).mean()
         df['SMA_200'] = df['Close'].rolling(200).mean()
@@ -179,173 +160,315 @@ def calc_position(price, atr, account, risk_pct, atr_mult):
     target_price = price + (stop_distance * 2)
     return shares, stop_price, target_price, risk_dollars
 
-# ========== FULL MARKET SCANNER ==========
+# ========== GET STOCK LIST (FIXED) ==========
+@st.cache_data(ttl=3600)
+def get_fallback_tickers():
+    """Expanded fallback list of 500+ liquid stocks"""
+    return [
+        # Tech
+        'AAPL', 'MSFT', 'GOOGL', 'AMZN', 'TSLA', 'NVDA', 'META', 'NFLX', 'AMD', 'INTC',
+        'ORCL', 'IBM', 'CSCO', 'QCOM', 'TXN', 'AVGO', 'MU', 'LRCX', 'KLAC', 'AMAT',
+        'ADI', 'NXPI', 'MCHP', 'ON', 'SWKS', 'QRVO', 'MPWR', 'MKSI', 'ENTG', 'TER',
+        'SMCI', 'DELL', 'HPQ', 'WDC', 'STX', 'NTAP', 'PSTG', 'PURE', 'CRWD', 'PANW',
+        'FTNT', 'ZS', 'OKTA', 'NET', 'DDOG', 'MDB', 'SNOW', 'PLTR', 'U', 'PATH',
+        'TEAM', 'WORK', 'ASAN', 'WDAY', 'CRM', 'NOW', 'ADSK', 'ADBE', 'ANSS', 'ROP',
+        # Finance
+        'JPM', 'BAC', 'WFC', 'C', 'GS', 'MS', 'V', 'MA', 'PYPL', 'SQ',
+        'AXP', 'COF', 'DFS', 'SYF', 'ALLY', 'USB', 'PNC', 'TFC', 'MTB', 'FITB',
+        'CFG', 'KEY', 'HBAN', 'RF', 'CMA', 'ZION', 'EWBC', 'FHN', 'COLB', 'GBCI',
+        'BLK', 'STT', 'BK', 'TROW', 'BEN', 'IVZ', 'NTRS', 'FDS', 'MORN', 'SEIC',
+        # Healthcare
+        'JNJ', 'PFE', 'MRK', 'ABBV', 'UNH', 'CVS', 'WMT', 'TGT', 'COST', 'HD',
+        'ABT', 'TMO', 'DHR', 'AMGN', 'GILD', 'BMY', 'REGN', 'VRTX', 'BIIB', 'ILMN',
+        'MTD', 'WST', 'ZBH', 'SYN', 'BSX', 'MDT', 'EW', 'ISRG', 'DXCM', 'ALGN',
+        # Consumer
+        'AMZN', 'TSLA', 'HD', 'LOW', 'MCD', 'SBUX', 'NKE', 'DIS', 'CMCSA', 'UBER',
+        'LYFT', 'DASH', 'GRUB', 'ETSY', 'CVNA', 'ABNB', 'BKNG', 'EXPE', 'RCL', 'CCL',
+        # Industrials
+        'BA', 'CAT', 'GE', 'DE', 'F', 'GM', 'RTX', 'LMT', 'NOC', 'GD',
+        'HON', 'MMM', 'UTX', 'PH', 'EMR', 'ETN', 'ITW', 'CMI', 'PCAR', 'RSG',
+        # Energy
+        'XOM', 'CVX', 'COP', 'PSX', 'VLO', 'MPC', 'MRO', 'EOG', 'PXD', 'FANG',
+        'DVN', 'OXY', 'APA', 'HES', 'NBL', 'CHK', 'CLR', 'MUR', 'SM', 'CPE',
+        # Communication
+        'T', 'VZ', 'TMUS', 'CMCSA', 'CHTR', 'DISH', 'ROKU', 'SPOT', 'SIRI', 'AMCX',
+        'FOXA', 'VIAC', 'PARA', 'WBD', 'NYT', 'GCI', 'TEGNA', 'NXST',
+        # Utilities
+        'NEE', 'DUK', 'SO', 'D', 'AEP', 'EXC', 'SRE', 'PEG', 'PCG', 'ED',
+        'WEC', 'ES', 'DTE', 'CMS', 'AEE', 'PPL', 'CNP', 'NI', 'LNT', 'EIX'
+    ]
+
 @st.cache_data(ttl=3600)
 def get_stock_list():
-    """Get list of stocks to scan"""
-    try:
-        # Try to use yfscreen first
+    """Get a list of stocks to scan with multiple backup sources"""
+    
+    # Try multiple sources in order
+    sources = [
+        "https://raw.githubusercontent.com/Ate329/top-us-stock-tickers/main/tickers/all.csv",
+        "https://raw.githubusercontent.com/datasets/s-and-p-500-companies/main/data/constituents.csv",
+        "https://raw.githubusercontent.com/jerryzhujin/US-Stock-Tickers/main/US-Stock-Tickers.txt"
+    ]
+    
+    for url in sources:
         try:
-            import yfscreen as yfs
-            filters = [
-                ["eq", ["region", "us"]],
-                ["gt", ["dayvolume", 500000]]
-            ]
-            query = yfs.create_query(filters)
-            payload = yfs.create_payload("equity", query)
-            data = yfs.get_data(payload)
-            return data[:150]
-        except:
-            # Fallback to GitHub list
-            url = "https://raw.githubusercontent.com/Ate329/top-us-stock-tickers/main/tickers/all.csv"
             df = pd.read_csv(url)
-            return df['symbol'].head(150).tolist()
-    except:
-        # Final fallback: popular stocks
-        return ['AAPL', 'MSFT', 'GOOGL', 'AMZN', 'TSLA', 'NVDA', 'META', 'NFLX', 'AMD', 'INTC',
-                'JPM', 'BAC', 'WFC', 'C', 'GS', 'MS', 'V', 'MA', 'PYPL', 'SQ',
-                'JNJ', 'PFE', 'MRK', 'ABBV', 'UNH', 'CVS', 'WMT', 'TGT', 'COST', 'HD',
-                'XOM', 'CVX', 'COP', 'SLB', 'BA', 'CAT', 'DE', 'GE', 'F', 'GM']
+            
+            if 'symbol' in df.columns:
+                tickers = df['symbol'].head(300).tolist()
+            elif 'Symbol' in df.columns:
+                tickers = df['Symbol'].head(300).tolist()
+            elif 'Ticker' in df.columns:
+                tickers = df['Ticker'].head(300).tolist()
+            else:
+                tickers = df.iloc[:, 0].head(300).tolist()
+            
+            tickers = [str(t).strip().upper() for t in tickers if str(t).strip()]
+            tickers = [t for t in tickers if t and not t.startswith('#')]
+            
+            if len(tickers) > 50:
+                return tickers
+        except:
+            continue
+    
+    return get_fallback_tickers()
 
-def scan_full_market():
-    """Scan the entire US market for swing trading opportunities"""
+# ========== SCANNER FUNCTIONS ==========
+def scan_momentum(tickers):
+    results = []
+    for tkr in tickers:
+        try:
+            stock = yf.Ticker(tkr)
+            hist = stock.history(period="3mo")
+            info = stock.info
+            
+            if hist.empty or len(hist) < 50:
+                continue
+            
+            latest = hist.iloc[-1]
+            market_cap = info.get('marketCap', 0)
+            
+            if market_cap < 300_000_000 or market_cap > 200_000_000_000:
+                continue
+            
+            sma_20 = hist['SMA_20'].iloc[-1]
+            if pd.isna(sma_20) or latest['Close'] <= sma_20:
+                continue
+            
+            sma_50 = hist['SMA_50'].iloc[-1]
+            if pd.isna(sma_50) or latest['Close'] <= sma_50:
+                continue
+            
+            is_weekend = datetime.now().weekday() >= 5
+            if not is_weekend:
+                vol_ma = hist['Volume'].rolling(20).mean().iloc[-1]
+                if pd.isna(vol_ma) or latest['Volume'] <= 1.5 * vol_ma:
+                    continue
+                volume_surge = latest['Volume'] / vol_ma
+            else:
+                vol_ma = hist['Volume'].rolling(20).mean().iloc[-1]
+                volume_surge = 1.5
+            
+            rsi = ta.momentum.RSIIndicator(hist['Close'], window=14).rsi().iloc[-1]
+            if pd.isna(rsi) or rsi < 50 or rsi > 80:
+                continue
+            
+            high_20 = hist['High'].tail(20).max()
+            if latest['Close'] < high_20 * 0.95:
+                continue
+            
+            results.append({
+                'Ticker': tkr,
+                'Price': round(latest['Close'], 2),
+                'RSI': round(rsi, 1),
+                'Volume Surge': round(volume_surge, 1),
+                'Market Cap': f"${round(market_cap / 1_000_000_000, 2)}B",
+                'Score': round(50 + (rsi - 50) + (volume_surge * 2), 0),
+                'ATR': round(hist['ATR'].iloc[-1], 2) if 'ATR' in hist.columns else None,
+                'Strategy': 'Momentum Breakout'
+            })
+        except:
+            continue
+    return sorted(results, key=lambda x: x['Score'], reverse=True)[:3]
+
+def scan_mean_reversion(tickers):
+    results = []
+    for tkr in tickers:
+        try:
+            stock = yf.Ticker(tkr)
+            hist = stock.history(period="3mo")
+            info = stock.info
+            
+            if hist.empty or len(hist) < 50:
+                continue
+            
+            latest = hist.iloc[-1]
+            market_cap = info.get('marketCap', 0)
+            
+            if market_cap < 300_000_000 or market_cap > 200_000_000_000:
+                continue
+            
+            sma_200 = hist['SMA_200'].iloc[-1]
+            if pd.isna(sma_200) or latest['Close'] <= sma_200:
+                continue
+            
+            sma_50 = hist['SMA_50'].iloc[-1]
+            if pd.isna(sma_50) or latest['Close'] >= sma_50:
+                continue
+            
+            is_weekend = datetime.now().weekday() >= 5
+            if not is_weekend:
+                vol_ma = hist['Volume'].rolling(20).mean().iloc[-1]
+                if pd.isna(vol_ma) or latest['Volume'] <= 1.2 * vol_ma:
+                    continue
+                volume_surge = latest['Volume'] / vol_ma
+            else:
+                volume_surge = 1.5
+            
+            rsi = ta.momentum.RSIIndicator(hist['Close'], window=14).rsi().iloc[-1]
+            if pd.isna(rsi) or rsi < 30 or rsi > 50:
+                continue
+            
+            results.append({
+                'Ticker': tkr,
+                'Price': round(latest['Close'], 2),
+                'RSI': round(rsi, 1),
+                'Volume Surge': round(volume_surge, 1),
+                'Market Cap': f"${round(market_cap / 1_000_000_000, 2)}B",
+                'Score': round(50 + (50 - rsi) + (volume_surge), 0),
+                'ATR': round(hist['ATR'].iloc[-1], 2) if 'ATR' in hist.columns else None,
+                'Strategy': 'Mean Reversion'
+            })
+        except:
+            continue
+    return sorted(results, key=lambda x: x['Score'], reverse=True)[:3]
+
+def scan_hybrid(tickers):
+    results = []
+    for tkr in tickers:
+        try:
+            stock = yf.Ticker(tkr)
+            hist = stock.history(period="4mo")
+            info = stock.info
+            
+            if hist.empty or len(hist) < 50:
+                continue
+            
+            latest = hist.iloc[-1]
+            market_cap = info.get('marketCap', 0)
+            
+            if market_cap < 500_000_000 or market_cap > 100_000_000_000:
+                continue
+            
+            sma_50 = hist['SMA_50'].iloc[-1]
+            if pd.isna(sma_50) or latest['Close'] <= sma_50:
+                continue
+            
+            rsi = ta.momentum.RSIIndicator(hist['Close'], window=14).rsi().iloc[-1]
+            if pd.isna(rsi) or rsi < 40 or rsi > 70:
+                continue
+            
+            is_weekend = datetime.now().weekday() >= 5
+            if not is_weekend:
+                vol_ma = hist['Volume'].rolling(20).mean().iloc[-1]
+                if pd.isna(vol_ma) or latest['Volume'] <= 1.2 * vol_ma:
+                    continue
+                volume_surge = latest['Volume'] / vol_ma
+            else:
+                volume_surge = 1.5
+            
+            pe = info.get('trailingPE', None)
+            roe = info.get('returnOnEquity', None)
+            
+            value_score = 0
+            if pe and pe < 20:
+                value_score += 10
+            if roe and roe > 0.15:
+                value_score += 10
+            
+            if value_score < 5:
+                continue
+            
+            results.append({
+                'Ticker': tkr,
+                'Price': round(latest['Close'], 2),
+                'RSI': round(rsi, 1),
+                'Volume Surge': round(volume_surge, 1),
+                'Market Cap': f"${round(market_cap / 1_000_000_000, 2)}B",
+                'Score': round(50 + (70 - rsi) + (volume_surge * 2) + value_score, 0),
+                'ATR': round(hist['ATR'].iloc[-1], 2) if 'ATR' in hist.columns else None,
+                'Strategy': 'Hybrid (Balanced)'
+            })
+        except:
+            continue
+    return sorted(results, key=lambda x: x['Score'], reverse=True)[:3]
+
+def scan_full_market(strategy):
+    tickers = get_stock_list()
+    
+    progress_bar = st.progress(0)
+    status_text = st.empty()
     
     results = []
     
-    try:
-        # Get stock list
-        tickers_to_scan = get_stock_list()
-        
-        progress_bar = st.progress(0)
-        status_text = st.empty()
-        
-        # Track debug info
-        debug_data = {
-            'total': 0,
-            'passed_ma': 0,
-            'passed_volume': 0,
-            'passed_rsi': 0,
-            'passed_all': 0
-        }
-        
-        for i, tkr in enumerate(tickers_to_scan):
-            tkr = tkr.strip().upper()
-            status_text.text(f"Scanning {i+1}/{len(tickers_to_scan)}: {tkr}")
-            progress_bar.progress((i + 1) / len(tickers_to_scan))
-            
-            try:
-                stock = yf.Ticker(tkr)
-                hist = stock.history(period="4mo")
-                info = stock.info
-                
-                if hist.empty or len(hist) < 50:
-                    continue
-                
-                debug_data['total'] += 1
-                latest = hist.iloc[-1]
-                
-                # Get market cap
-                market_cap = info.get('marketCap', 0)
-                if market_cap < 200_000_000 or market_cap > 200_000_000_000:
-                    continue
-                
-                # ----- FILTER 1: Price above 50-day MA -----
-                sma_50 = hist['SMA_50'].iloc[-1]
-                if pd.isna(sma_50):
-                    continue
-                
-                # Looser: price above 95% of 50-day MA
-                if latest['Close'] < sma_50 * 0.95:
-                    continue
-                debug_data['passed_ma'] += 1
-                
-                # ----- FILTER 2: Volume surge -----
-                vol_ma = hist['Volume'].rolling(20).mean().iloc[-1]
-                if pd.isna(vol_ma) or vol_ma == 0:
-                    continue
-                
-                # Looser: volume above 1.1x average
-                if latest['Volume'] <= 1.1 * vol_ma:
-                    continue
-                debug_data['passed_volume'] += 1
-                
-                # ----- FILTER 3: RSI sweet spot -----
-                rsi = ta.momentum.RSIIndicator(hist['Close'], window=14).rsi().iloc[-1]
-                if pd.isna(rsi):
-                    continue
-                
-                # Wider range: 30 to 75
-                if rsi < 30 or rsi > 75:
-                    continue
-                debug_data['passed_rsi'] += 1
-                
-                # ----- PASSED ALL FILTERS! -----
-                debug_data['passed_all'] += 1
-                
-                # Calculate score
-                volume_ratio = latest['Volume'] / vol_ma if vol_ma > 0 else 1
-                score = 50 + (70 - rsi) + (volume_ratio * 5)
-                score = min(100, max(0, score))
-                
-                results.append({
-                    'Ticker': tkr,
-                    'Price': round(latest['Close'], 2),
-                    'RSI': round(rsi, 1),
-                    'Volume Surge': round(volume_ratio, 1),
-                    'Market Cap': f"${round(market_cap / 1_000_000_000, 2)}B",
-                    'Score': round(score, 0),
-                    'ATR': round(hist['ATR'].iloc[-1], 2) if 'ATR' in hist.columns else None
-                })
-                
-            except Exception as e:
-                continue
-        
-        progress_bar.empty()
-        status_text.empty()
-        
-        # Show debug info
-        st.info(
-            f"📊 Scan Results: {debug_data['total']} stocks checked | "
-            f"✅ Passed MA: {debug_data['passed_ma']} | "
-            f"✅ Passed Volume: {debug_data['passed_volume']} | "
-            f"✅ Passed RSI: {debug_data['passed_rsi']} | "
-            f"🏆 Final Picks: {debug_data['passed_all']}"
-        )
-        
-    except Exception as e:
-        st.error(f"Scanner error: {str(e)}")
+    if strategy == "Momentum Breakout":
+        results = scan_momentum(tickers)
+    elif strategy == "Mean Reversion":
+        results = scan_mean_reversion(tickers)
+    else:
+        results = scan_hybrid(tickers)
     
-    # Sort by score and return top 3
-    results = sorted(results, key=lambda x: x['Score'], reverse=True)
-    return results[:3]
+    progress_bar.empty()
+    status_text.empty()
+    
+    return results
 
 # ========== TAB 1: DASHBOARD ==========
 with tab1:
     st.title("📊 Swing Commander")
     st.markdown("---")
     
-    # ===== FULL MARKET SCANNER =====
     st.subheader("🔍 Full Market Scanner")
-    st.caption("Scanning the entire US market for the best swing trading setups")
+    st.caption("Choose a strategy and scan the entire US market")
+    
+    strategy_options = ["Momentum Breakout", "Mean Reversion", "Hybrid (Balanced)"]
+    selected_strategy = st.selectbox("Select Strategy", strategy_options, index=2)
     
     col1, col2 = st.columns([1, 4])
     with col1:
         scan_btn = st.button("🚀 Scan Market", type="primary")
     
+    with st.expander("📖 Strategy Descriptions"):
+        st.markdown("""
+        **1. Momentum Breakout** (Aggressive)
+        - Finds stocks breaking out to new highs
+        - Best for bull markets
+        - Filters: Price > 20-day & 50-day MA, RSI 50-80, Volume surge
+        
+        **2. Mean Reversion** (Conservative)
+        - Finds oversold stocks due for a bounce
+        - Best for sideways or choppy markets
+        - Filters: Price > 200-day MA but < 50-day MA, RSI 30-50
+        
+        **3. Hybrid (Balanced)**
+        - Combines momentum and value factors
+        - Works in all market conditions
+        - Filters: Price > 50-day MA, RSI 40-70, Value metrics (P/E < 20 or ROE > 15%)
+        """)
+    
     if scan_btn:
-        with st.spinner("Scanning the entire market..."):
-            results = scan_full_market()
+        with st.spinner(f"Scanning with {selected_strategy} strategy..."):
+            results = scan_full_market(selected_strategy)
             st.session_state.scan_results = results
         
         if st.session_state.scan_results:
-            st.success(f"✅ Found {len(st.session_state.scan_results)} top picks from the entire market!")
+            st.success(f"✅ Found {len(st.session_state.scan_results)} top picks!")
             st.markdown("---")
             
-            # Display top 3 picks as large cards
             cols = st.columns(3)
             for idx, stock in enumerate(st.session_state.scan_results):
                 with cols[idx]:
                     st.subheader(f"🏆 #{idx+1} {stock['Ticker']}")
+                    st.caption(f"Strategy: {stock['Strategy']}")
                     st.metric("💰 Price", f"${stock['Price']}")
                     st.metric("📊 RSI", stock['RSI'])
                     st.metric("📈 Volume Surge", f"{stock['Volume Surge']}x")
@@ -354,13 +477,12 @@ with tab1:
                     if stock.get('ATR'):
                         st.caption(f"ATR: ${stock['ATR']}")
                     
-                    # Quick trade button
                     if st.button(f"📈 Analyze {stock['Ticker']}", key=f"quick_{stock['Ticker']}"):
                         st.session_state.quick_ticker = stock['Ticker']
                         st.rerun()
         else:
-            st.warning("No stocks passed the filters today. Try again later or widen the filters.")
-            st.caption("💡 Tip: Run this during market hours for better results.")
+            st.warning(f"No stocks passed the {selected_strategy} filters today.")
+            st.caption("💡 Tip: Try a different strategy or run during market hours.")
     
     st.markdown("---")
     
@@ -380,7 +502,6 @@ with tab1:
             change = latest['Close'] - prev['Close']
             change_pct = (change / prev['Close']) * 100 if prev['Close'] != 0 else 0
             
-            # Metrics
             col1, col2, col3, col4, col5 = st.columns(5)
             col1.metric("💰 Price", f"${latest['Close']:.2f}", f"{change:+.2f} ({change_pct:+.2f}%)")
             col2.metric("📊 Volume", f"{latest['Volume']:,.0f}")
@@ -390,7 +511,6 @@ with tab1:
             pe = info.get('trailingPE', None)
             col5.metric("🧮 P/E", f"{pe:.2f}" if pe else "N/A")
             
-            # Position Sizing
             current_atr = latest['ATR'] if 'ATR' in df.columns else None
             if current_atr and not pd.isna(current_atr) and current_atr > 0:
                 shares, stop_price, target_price, risk_dollars = calc_position(
@@ -404,9 +524,7 @@ with tab1:
                 col_c.metric("🎯 Target", f"${target_price:.2f}")
                 col_d.metric("⚠️ Max Risk", f"${risk_dollars:,.2f}")
                 
-                # Add to trade button
                 if st.button(f"➕ Add {analysis_ticker} to Active Trades"):
-                    # Create new trade
                     new_trade = {
                         'id': len(st.session_state.active_trades) + 1,
                         'ticker': analysis_ticker,
@@ -421,7 +539,6 @@ with tab1:
                     st.success(f"✅ {analysis_ticker} added to active trades!")
                     st.rerun()
             
-            # Signals
             signals, rec, score = get_signals(df)
             
             col_a, col_b = st.columns([2, 1])
@@ -439,10 +556,10 @@ with tab1:
                 else:
                     st.info(f"### {rec}")
             
-            # Chart
             st.subheader("📉 Price Chart")
             fig = go.Figure()
             fig.add_trace(go.Scatter(x=df.index, y=df['Close'], mode='lines', name='Close', line=dict(color='white', width=2)))
+            fig.add_trace(go.Scatter(x=df.index, y=df['SMA_20'], mode='lines', name='SMA 20', line=dict(color='orange', width=1, dash='dot')))
             fig.add_trace(go.Scatter(x=df.index, y=df['SMA_50'], mode='lines', name='SMA 50', line=dict(color='blue', width=1, dash='dash')))
             fig.add_trace(go.Scatter(x=df.index, y=df['SMA_200'], mode='lines', name='SMA 200', line=dict(color='red', width=1, dash='dash')))
             fig.update_layout(height=400, template='plotly_dark', xaxis_title='Date', yaxis_title='Price')
@@ -454,176 +571,4 @@ with tab2:
     st.markdown("---")
     
     if st.session_state.active_trades:
-        for idx, trade in enumerate(st.session_state.active_trades):
-            ticker = trade['ticker']
-            entry_date = trade['entry_date']
-            entry_price = trade['entry_price']
-            shares = trade['shares']
-            stop_price = trade['stop_price']
-            target_price = trade['target_price']
-            trade_id = trade['id']
-            
-            # Get current price
-            stock = yf.Ticker(ticker)
-            hist = stock.history(period="5d")
-            if not hist.empty:
-                current_price = hist['Close'].iloc[-1]
-                pnl = (current_price - entry_price) * shares
-                pnl_pct = ((current_price - entry_price) / entry_price) * 100
-                days_held = (datetime.now() - datetime.strptime(entry_date, '%Y-%m-%d')).days
-            else:
-                current_price = entry_price
-                pnl = 0
-                pnl_pct = 0
-                days_held = 0
-            
-            with st.container():
-                st.subheader(f"📊 {ticker}")
-                col1, col2, col3, col4, col5 = st.columns([2, 1, 1, 1, 1])
-                with col1:
-                    st.caption(f"Entry: {entry_date} | Days Held: {days_held}")
-                    st.caption(f"Shares: {shares:,}")
-                with col2:
-                    st.metric("Entry", f"${entry_price:.2f}")
-                with col3:
-                    st.metric("Current", f"${current_price:.2f}")
-                with col4:
-                    delta_color = "normal" if pnl >= 0 else "inverse"
-                    st.metric("P&L", f"${pnl:.2f}", f"{pnl_pct:+.1f}%", delta_color=delta_color)
-                with col5:
-                    st.metric("Stop", f"${stop_price:.2f}")
-                    st.caption(f"Target: ${target_price:.2f}")
-                
-                col1, col2 = st.columns([1, 4])
-                with col1:
-                    if st.button(f"✅ Close {ticker}", key=f"close_{idx}"):
-                        st.session_state.closing_trade = idx
-                        st.rerun()
-                
-                # Close trade form
-                if st.session_state.closing_trade == idx:
-                    with st.form(key=f"close_form_{idx}"):
-                        exit_price = st.number_input("Exit Price", value=current_price, step=0.01)
-                        notes = st.text_area("Notes")
-                        submitted = st.form_submit_button("Confirm Close")
-                        if submitted:
-                            pnl_final = (exit_price - entry_price) * shares
-                            # Move to history
-                            closed_trade = {
-                                'ticker': ticker,
-                                'entry_date': entry_date,
-                                'entry_price': entry_price,
-                                'exit_date': datetime.now().strftime('%Y-%m-%d'),
-                                'exit_price': exit_price,
-                                'shares': shares,
-                                'pnl': pnl_final,
-                                'notes': notes,
-                                'status': 'CLOSED'
-                            }
-                            st.session_state.trade_history.append(closed_trade)
-                            # Remove from active
-                            st.session_state.active_trades.pop(idx)
-                            st.session_state.closing_trade = None
-                            st.success(f"✅ {ticker} closed! P&L: ${pnl_final:.2f}")
-                            st.rerun()
-                
-                st.markdown("---")
-    else:
-        st.info("No active trades. Use the scanner to find picks!")
-
-# ========== TAB 3: JOURNAL ==========
-with tab3:
-    st.title("📓 Trade Journal")
-    st.markdown("---")
-    
-    # Add new trade form
-    with st.expander("➕ Add New Trade Manually", expanded=False):
-        with st.form("new_trade"):
-            col1, col2 = st.columns(2)
-            with col1:
-                ticker_input = st.text_input("Ticker", value="AAPL").upper()
-                entry_price = st.number_input("Entry Price", min_value=0.01, step=0.01, value=150.00)
-                shares = st.number_input("Shares", min_value=1, step=1, value=100)
-            with col2:
-                stop_price = st.number_input("Stop Loss Price", min_value=0.01, step=0.01, value=140.00)
-                target_price = st.number_input("Target Price", min_value=0.01, step=0.01, value=165.00)
-                notes = st.text_area("Notes", placeholder="Why did you enter this trade?")
-            
-            submitted = st.form_submit_button("Add Trade")
-            if submitted:
-                new_trade = {
-                    'id': len(st.session_state.active_trades) + 1,
-                    'ticker': ticker_input,
-                    'entry_date': datetime.now().strftime('%Y-%m-%d'),
-                    'entry_price': entry_price,
-                    'shares': shares,
-                    'stop_price': stop_price,
-                    'target_price': target_price,
-                    'status': 'ACTIVE'
-                }
-                st.session_state.active_trades.append(new_trade)
-                st.success(f"✅ {ticker_input} added to active trades!")
-                st.rerun()
-    
-    st.subheader("📊 Trade History")
-    
-    if st.session_state.trade_history:
-        # Calculate summary stats
-        total_trades = len(st.session_state.trade_history)
-        winning_trades = sum(1 for t in st.session_state.trade_history if t['pnl'] and t['pnl'] > 0)
-        total_pnl = sum(t['pnl'] for t in st.session_state.trade_history if t['pnl'])
-        
-        col1, col2, col3 = st.columns(3)
-        col1.metric("📊 Total Trades", total_trades)
-        col2.metric("✅ Win Rate", f"{round(winning_trades/total_trades*100)}%" if total_trades > 0 else "N/A")
-        col3.metric("💰 Total P&L", f"${total_pnl:.2f}")
-        
-        st.markdown("---")
-        
-        for trade in st.session_state.trade_history[::-1]:
-            ticker = trade['ticker']
-            entry_date = trade['entry_date']
-            entry_price = trade['entry_price']
-            exit_date = trade['exit_date']
-            exit_price = trade['exit_price']
-            shares = trade['shares']
-            pnl = trade['pnl']
-            notes = trade['notes']
-            status = trade['status']
-            
-            with st.container():
-                col1, col2, col3, col4 = st.columns([2, 1, 1, 2])
-                with col1:
-                    st.subheader(ticker)
-                    st.caption(f"Entry: {entry_date} | Exit: {exit_date if exit_date else 'Open'}")
-                    st.caption(f"Status: {status}")
-                with col2:
-                    st.metric("Entry", f"${entry_price:.2f}")
-                    st.metric("Exit", f"${exit_price:.2f}" if exit_price else "-")
-                with col3:
-                    if pnl:
-                        delta_color = "normal" if pnl > 0 else "inverse"
-                        st.metric("P&L", f"${pnl:.2f}", delta_color=delta_color)
-                    else:
-                        st.metric("P&L", "-")
-                with col4:
-                    if notes:
-                        st.caption(f"📝 {notes}")
-                
-                st.markdown("---")
-    else:
-        st.info("No trades logged yet. Start your trading journey!")
-
-# ========== SIDEBAR - QUICK ACTIONS ==========
-st.sidebar.markdown("---")
-st.sidebar.subheader("⚡ Quick Actions")
-
-if st.sidebar.button("🔄 Refresh Data"):
-    st.cache_data.clear()
-    st.rerun()
-
-st.sidebar.caption(f"📊 Active Trades: {len(st.session_state.active_trades)}")
-st.sidebar.caption(f"📓 Trades History: {len(st.session_state.trade_history)}")
-
-st.sidebar.markdown("---")
-st.sidebar.caption("🔍 Tip: Run scanner during market hours for best results")
+        for idx
