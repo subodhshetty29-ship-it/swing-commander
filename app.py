@@ -32,8 +32,10 @@ init_session()
 # ========== SIDEBAR ==========
 st.sidebar.title("⚙️ Settings")
 
+# Stock Input
 ticker = st.sidebar.text_input("Search Stock", value="AAPL").upper()
 
+# Time Period
 period_map = {
     "1 Month": "1mo",
     "3 Months": "3mo",
@@ -47,6 +49,7 @@ period = period_map[selected_period]
 
 st.sidebar.markdown("---")
 
+# ========== POSITION SIZING (AUTO-UPDATES) ==========
 st.sidebar.subheader("💰 Position Sizing")
 
 account_size = st.sidebar.number_input(
@@ -54,23 +57,26 @@ account_size = st.sidebar.number_input(
     min_value=100,
     max_value=10000000,
     value=50000,
-    step=1000
+    step=1000,
+    help="Your total trading capital. Changes update automatically."
 )
 
 risk_percent = st.sidebar.slider(
     "Risk per Trade (%)",
     min_value=0.5,
-    max_value=3.0,
+    max_value=5.0,
     value=1.0,
-    step=0.1
+    step=0.1,
+    help="% of account you're willing to risk per trade"
 )
 
 atr_multiplier = st.sidebar.slider(
     "Stop Loss (ATR x)",
-    min_value=1.0,
+    min_value=0.5,
     max_value=3.0,
     value=2.0,
-    step=0.5
+    step=0.5,
+    help="Wider stop = fewer shares, tighter stop = more shares"
 )
 
 st.sidebar.markdown("---")
@@ -151,13 +157,42 @@ def get_signals(df):
     
     return signals, rec, score
 
-# ========== POSITION SIZING ==========
+# ========== POSITION SIZING (AUTO-UPDATING) ==========
 def calc_position(price, atr, account, risk_pct, atr_mult):
+    """Calculate position size that automatically updates with account changes"""
+    
+    # Risk in dollars
     risk_dollars = account * (risk_pct / 100)
+    
+    # Stop distance in dollars
     stop_distance = atr * atr_mult
-    shares = int(risk_dollars / stop_distance) if stop_distance > 0 else 0
+    
+    # Minimum stop distance (1% of price)
+    if stop_distance < price * 0.01:
+        stop_distance = price * 0.01
+    
+    # Calculate shares (allow fractional)
+    shares = risk_dollars / stop_distance
+    
+    # Round appropriately
+    if shares < 1:
+        shares = round(shares, 2)  # Fractional shares
+    else:
+        shares = int(shares)  # Whole shares
+    
     stop_price = price - stop_distance
     target_price = price + (stop_distance * 2)
+    
+    # Safety: stop price shouldn't be below 85% of entry
+    if stop_price < price * 0.85:
+        stop_price = price * 0.85
+        stop_distance = price - stop_price
+        shares = risk_dollars / stop_distance
+        if shares < 1:
+            shares = round(shares, 2)
+        else:
+            shares = int(shares)
+    
     return shares, stop_price, target_price, risk_dollars
 
 # ========== CURATED WATCHLIST ==========
@@ -178,8 +213,6 @@ def get_watchlist():
 def scan_watchlist():
     watchlist = get_watchlist()
     results = []
-    
-    # Check if it's weekend
     is_weekend = datetime.now().weekday() >= 5
     
     for tkr in watchlist:
@@ -192,11 +225,8 @@ def scan_watchlist():
                 continue
             
             latest = hist.iloc[-1]
-            
-            # Get the last 5 days to check for recent trend
             last_5 = hist.tail(5)
             
-            # Calculate indicators
             sma_20 = hist['SMA_20'].iloc[-1]
             sma_50 = hist['SMA_50'].iloc[-1]
             sma_200 = hist['SMA_200'].iloc[-1]
@@ -207,26 +237,24 @@ def scan_watchlist():
             if pd.isna(sma_20) or pd.isna(sma_50) or pd.isna(rsi):
                 continue
             
-            # ----- SCORING SYSTEM (Simpler, works on weekends) -----
             score = 0
             signals = []
             
-            # 1. Price > 50-day MA (Uptrend) - Most important
+            # 1. Price > 50-day MA (Uptrend)
             if latest['Close'] > sma_50:
                 score += 30
                 signals.append("Uptrend")
             else:
-                # Still give points if close to MA
                 if latest['Close'] > sma_50 * 0.97:
                     score += 15
                     signals.append("Near MA")
             
-            # 2. Price > 20-day MA (Short-term momentum)
+            # 2. Price > 20-day MA (Momentum)
             if latest['Close'] > sma_20:
                 score += 15
                 signals.append("Momentum")
             
-            # 3. RSI sweet spot (30-65) - Not overbought, not oversold
+            # 3. RSI sweet spot (30-65)
             if 30 <= rsi <= 65:
                 score += 25
                 signals.append(f"RSI: {round(rsi)}")
@@ -234,23 +262,19 @@ def scan_watchlist():
                 score += 10
                 signals.append(f"RSI: {round(rsi)}")
             
-            # 4. Volume surge - Only check on weekdays
+            # 4. Volume (skip on weekends)
             if not is_weekend:
                 if vol_ma > 0 and latest['Volume'] > 1.2 * vol_ma:
                     score += 15
                     signals.append("Volume Surge")
-                else:
-                    # On weekdays with low volume, still give some points
-                    if latest['Volume'] > vol_ma * 0.8:
-                        score += 5
+                elif latest['Volume'] > vol_ma * 0.8:
+                    score += 5
             else:
-                # Weekend: Skip volume check, give default points
                 score += 10
                 signals.append("Weekend Mode")
             
-            # 5. Recent price action (last 5 days)
+            # 5. Recent price action
             if len(last_5) >= 5:
-                # Price is above the average of last 5 days
                 if latest['Close'] > last_5['Close'].mean():
                     score += 10
                     signals.append("Recent Strength")
@@ -260,7 +284,6 @@ def scan_watchlist():
                 score += 10
                 signals.append("Long-term Trend")
             
-            # Include stocks with score >= 40 (lowered threshold for weekend)
             if score >= 40:
                 results.append({
                     'Ticker': tkr,
@@ -287,10 +310,9 @@ with tab1:
     
     st.subheader("🔍 Scanner")
     
-    # Show if it's weekend
     is_weekend = datetime.now().weekday() >= 5
     if is_weekend:
-        st.info("📌 Weekend Mode: Volume filter is disabled. This helps find setups on Saturdays and Sundays.")
+        st.info("📌 Weekend Mode: Volume filter is disabled.")
     else:
         st.caption("Scanning 45 high-quality stocks across all sectors")
     
@@ -337,7 +359,7 @@ with tab1:
     
     st.markdown("---")
     
-    # ===== INDIVIDUAL STOCK ANALYSIS =====
+    # ===== INDIVIDUAL STOCK ANALYSIS (AUTO-UPDATES WITH ACCOUNT) =====
     analysis_ticker = st.session_state.quick_ticker if st.session_state.quick_ticker else ticker
     
     if analysis_ticker:
@@ -362,6 +384,7 @@ with tab1:
             pe = info.get('trailingPE', None)
             col5.metric("🧮 P/E", f"{pe:.2f}" if pe else "N/A")
             
+            # ===== POSITION SIZING (AUTO-UPDATES) =====
             current_atr = latest['ATR'] if 'ATR' in df.columns else None
             if current_atr and not pd.isna(current_atr) and current_atr > 0:
                 shares, stop_price, target_price, risk_dollars = calc_position(
@@ -369,12 +392,28 @@ with tab1:
                 )
                 
                 st.subheader("🎯 Trade Setup")
+                st.caption(f"Auto-calculated based on ${account_size:,} account | Risk {risk_percent}% | Stop {atr_multiplier}x ATR")
+                
                 col_a, col_b, col_c, col_d = st.columns(4)
-                col_a.metric("📦 Shares", f"{shares:,}")
+                
+                # Format shares display
+                if isinstance(shares, float) and shares < 1:
+                    shares_display = f"{shares:.2f} shares (fractional)"
+                elif isinstance(shares, float):
+                    shares_display = f"{shares:.2f} shares"
+                else:
+                    shares_display = f"{shares:,} shares"
+                
+                col_a.metric("📦 Shares to Buy", shares_display)
                 col_b.metric("🛑 Stop Loss", f"${stop_price:.2f}")
                 col_c.metric("🎯 Target", f"${target_price:.2f}")
-                col_d.metric("⚠️ Max Risk", f"${risk_dollars:,.2f}")
+                col_d.metric("⚠️ Max Risk", f"${risk_dollars:,.2f} ({risk_percent}%)")
                 
+                # Show warning for small accounts
+                if isinstance(shares, float) and shares < 1:
+                    st.warning("⚠️ Your account size is small for this stock. Consider fractional shares or increase your account size.")
+                
+                # Add to trades button
                 if st.button(f"➕ Add {analysis_ticker} to Active Trades"):
                     new_trade = {
                         'id': len(st.session_state.active_trades) + 1,
@@ -389,7 +428,10 @@ with tab1:
                     st.session_state.active_trades.append(new_trade)
                     st.success(f"✅ {analysis_ticker} added to active trades!")
                     st.rerun()
+            else:
+                st.warning("⚠️ Not enough data for position sizing.")
             
+            # Signals
             signals, rec, score = get_signals(df)
             
             col_a, col_b = st.columns([2, 1])
@@ -448,7 +490,10 @@ with tab2:
                 col1, col2, col3, col4, col5 = st.columns([2, 1, 1, 1, 1])
                 with col1:
                     st.caption(f"Entry: {entry_date} | Days Held: {days_held}")
-                    st.caption(f"Shares: {shares:,}")
+                    if isinstance(shares, float):
+                        st.caption(f"Shares: {shares:.2f}")
+                    else:
+                        st.caption(f"Shares: {shares:,}")
                 with col2:
                     st.metric("Entry", f"${entry_price:.2f}")
                 with col3:
@@ -505,7 +550,7 @@ with tab3:
             with col1:
                 ticker_input = st.text_input("Ticker", value="AAPL").upper()
                 entry_price = st.number_input("Entry Price", min_value=0.01, step=0.01, value=150.00)
-                shares = st.number_input("Shares", min_value=1, step=1, value=100)
+                shares = st.number_input("Shares", min_value=0.01, step=0.01, value=100.0)
             with col2:
                 stop_price = st.number_input("Stop Loss Price", min_value=0.01, step=0.01, value=140.00)
                 target_price = st.number_input("Target Price", min_value=0.01, step=0.01, value=165.00)
@@ -590,3 +635,4 @@ if is_weekend:
     st.sidebar.caption("📌 Weekend Mode: Volume filter disabled")
 else:
     st.sidebar.caption("📌 Market Hours: 9:30 AM - 4:00 PM EST")
+st.sidebar.caption(f"💰 Account: ${account_size:,}")
