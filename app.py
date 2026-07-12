@@ -160,49 +160,37 @@ def calc_position(price, atr, account, risk_pct, atr_mult):
     target_price = price + (stop_distance * 2)
     return shares, stop_price, target_price, risk_dollars
 
-# ========== GET STOCK LIST (FIXED) ==========
+# ========== GET STOCK LIST ==========
 @st.cache_data(ttl=3600)
 def get_fallback_tickers():
     """Expanded fallback list of 500+ liquid stocks"""
     return [
-        # Tech
         'AAPL', 'MSFT', 'GOOGL', 'AMZN', 'TSLA', 'NVDA', 'META', 'NFLX', 'AMD', 'INTC',
         'ORCL', 'IBM', 'CSCO', 'QCOM', 'TXN', 'AVGO', 'MU', 'LRCX', 'KLAC', 'AMAT',
         'ADI', 'NXPI', 'MCHP', 'ON', 'SWKS', 'QRVO', 'MPWR', 'MKSI', 'ENTG', 'TER',
         'SMCI', 'DELL', 'HPQ', 'WDC', 'STX', 'NTAP', 'PSTG', 'PURE', 'CRWD', 'PANW',
         'FTNT', 'ZS', 'OKTA', 'NET', 'DDOG', 'MDB', 'SNOW', 'PLTR', 'U', 'PATH',
         'TEAM', 'WORK', 'ASAN', 'WDAY', 'CRM', 'NOW', 'ADSK', 'ADBE', 'ANSS', 'ROP',
-        # Finance
         'JPM', 'BAC', 'WFC', 'C', 'GS', 'MS', 'V', 'MA', 'PYPL', 'SQ',
         'AXP', 'COF', 'DFS', 'SYF', 'ALLY', 'USB', 'PNC', 'TFC', 'MTB', 'FITB',
         'CFG', 'KEY', 'HBAN', 'RF', 'CMA', 'ZION', 'EWBC', 'FHN', 'COLB', 'GBCI',
         'BLK', 'STT', 'BK', 'TROW', 'BEN', 'IVZ', 'NTRS', 'FDS', 'MORN', 'SEIC',
-        # Healthcare
         'JNJ', 'PFE', 'MRK', 'ABBV', 'UNH', 'CVS', 'WMT', 'TGT', 'COST', 'HD',
         'ABT', 'TMO', 'DHR', 'AMGN', 'GILD', 'BMY', 'REGN', 'VRTX', 'BIIB', 'ILMN',
         'MTD', 'WST', 'ZBH', 'SYN', 'BSX', 'MDT', 'EW', 'ISRG', 'DXCM', 'ALGN',
-        # Consumer
-        'AMZN', 'TSLA', 'HD', 'LOW', 'MCD', 'SBUX', 'NKE', 'DIS', 'CMCSA', 'UBER',
-        'LYFT', 'DASH', 'GRUB', 'ETSY', 'CVNA', 'ABNB', 'BKNG', 'EXPE', 'RCL', 'CCL',
-        # Industrials
-        'BA', 'CAT', 'GE', 'DE', 'F', 'GM', 'RTX', 'LMT', 'NOC', 'GD',
-        'HON', 'MMM', 'UTX', 'PH', 'EMR', 'ETN', 'ITW', 'CMI', 'PCAR', 'RSG',
-        # Energy
-        'XOM', 'CVX', 'COP', 'PSX', 'VLO', 'MPC', 'MRO', 'EOG', 'PXD', 'FANG',
-        'DVN', 'OXY', 'APA', 'HES', 'NBL', 'CHK', 'CLR', 'MUR', 'SM', 'CPE',
-        # Communication
-        'T', 'VZ', 'TMUS', 'CMCSA', 'CHTR', 'DISH', 'ROKU', 'SPOT', 'SIRI', 'AMCX',
-        'FOXA', 'VIAC', 'PARA', 'WBD', 'NYT', 'GCI', 'TEGNA', 'NXST',
-        # Utilities
-        'NEE', 'DUK', 'SO', 'D', 'AEP', 'EXC', 'SRE', 'PEG', 'PCG', 'ED',
-        'WEC', 'ES', 'DTE', 'CMS', 'AEE', 'PPL', 'CNP', 'NI', 'LNT', 'EIX'
+        'LOW', 'MCD', 'SBUX', 'NKE', 'DIS', 'CMCSA', 'UBER', 'LYFT', 'DASH', 'GRUB',
+        'ETSY', 'CVNA', 'ABNB', 'BKNG', 'EXPE', 'RCL', 'CCL', 'BA', 'CAT', 'GE',
+        'DE', 'F', 'GM', 'RTX', 'LMT', 'NOC', 'GD', 'HON', 'MMM', 'UTX',
+        'PH', 'EMR', 'ETN', 'ITW', 'CMI', 'PCAR', 'RSG', 'XOM', 'CVX', 'COP',
+        'PSX', 'VLO', 'MPC', 'MRO', 'EOG', 'PXD', 'FANG', 'DVN', 'OXY', 'APA',
+        'T', 'VZ', 'TMUS', 'CHTR', 'DISH', 'ROKU', 'SPOT', 'SIRI', 'AMCX',
+        'FOXA', 'VIAC', 'PARA', 'WBD', 'NYT', 'NEE', 'DUK', 'SO', 'D', 'AEP'
     ]
 
 @st.cache_data(ttl=3600)
 def get_stock_list():
     """Get a list of stocks to scan with multiple backup sources"""
     
-    # Try multiple sources in order
     sources = [
         "https://raw.githubusercontent.com/Ate329/top-us-stock-tickers/main/tickers/all.csv",
         "https://raw.githubusercontent.com/datasets/s-and-p-500-companies/main/data/constituents.csv",
@@ -235,7 +223,7 @@ def get_stock_list():
 # ========== SCANNER FUNCTIONS ==========
 def scan_momentum(tickers):
     results = []
-    for tkr in tickers:
+    for tkr in tickers[:150]:
         try:
             stock = yf.Ticker(tkr)
             hist = stock.history(period="3mo")
@@ -265,7 +253,6 @@ def scan_momentum(tickers):
                     continue
                 volume_surge = latest['Volume'] / vol_ma
             else:
-                vol_ma = hist['Volume'].rolling(20).mean().iloc[-1]
                 volume_surge = 1.5
             
             rsi = ta.momentum.RSIIndicator(hist['Close'], window=14).rsi().iloc[-1]
@@ -292,7 +279,7 @@ def scan_momentum(tickers):
 
 def scan_mean_reversion(tickers):
     results = []
-    for tkr in tickers:
+    for tkr in tickers[:150]:
         try:
             stock = yf.Ticker(tkr)
             hist = stock.history(period="3mo")
@@ -344,7 +331,7 @@ def scan_mean_reversion(tickers):
 
 def scan_hybrid(tickers):
     results = []
-    for tkr in tickers:
+    for tkr in tickers[:150]:
         try:
             stock = yf.Ticker(tkr)
             hist = stock.history(period="4mo")
@@ -404,10 +391,6 @@ def scan_hybrid(tickers):
 
 def scan_full_market(strategy):
     tickers = get_stock_list()
-    
-    progress_bar = st.progress(0)
-    status_text = st.empty()
-    
     results = []
     
     if strategy == "Momentum Breakout":
@@ -416,9 +399,6 @@ def scan_full_market(strategy):
         results = scan_mean_reversion(tickers)
     else:
         results = scan_hybrid(tickers)
-    
-    progress_bar.empty()
-    status_text.empty()
     
     return results
 
@@ -571,4 +551,167 @@ with tab2:
     st.markdown("---")
     
     if st.session_state.active_trades:
-        for idx
+        for idx, trade in enumerate(st.session_state.active_trades):
+            ticker = trade['ticker']
+            entry_date = trade['entry_date']
+            entry_price = trade['entry_price']
+            shares = trade['shares']
+            stop_price = trade['stop_price']
+            target_price = trade['target_price']
+            
+            stock = yf.Ticker(ticker)
+            hist = stock.history(period="5d")
+            if not hist.empty:
+                current_price = hist['Close'].iloc[-1]
+                pnl = (current_price - entry_price) * shares
+                pnl_pct = ((current_price - entry_price) / entry_price) * 100
+                days_held = (datetime.now() - datetime.strptime(entry_date, '%Y-%m-%d')).days
+            else:
+                current_price = entry_price
+                pnl = 0
+                pnl_pct = 0
+                days_held = 0
+            
+            with st.container():
+                st.subheader(f"📊 {ticker}")
+                col1, col2, col3, col4, col5 = st.columns([2, 1, 1, 1, 1])
+                with col1:
+                    st.caption(f"Entry: {entry_date} | Days Held: {days_held}")
+                    st.caption(f"Shares: {shares:,}")
+                with col2:
+                    st.metric("Entry", f"${entry_price:.2f}")
+                with col3:
+                    st.metric("Current", f"${current_price:.2f}")
+                with col4:
+                    delta_color = "normal" if pnl >= 0 else "inverse"
+                    st.metric("P&L", f"${pnl:.2f}", f"{pnl_pct:+.1f}%", delta_color=delta_color)
+                with col5:
+                    st.metric("Stop", f"${stop_price:.2f}")
+                    st.caption(f"Target: ${target_price:.2f}")
+                
+                col1, col2 = st.columns([1, 4])
+                with col1:
+                    if st.button(f"✅ Close {ticker}", key=f"close_{idx}"):
+                        st.session_state.closing_trade = idx
+                        st.rerun()
+                
+                if st.session_state.closing_trade == idx:
+                    with st.form(key=f"close_form_{idx}"):
+                        exit_price = st.number_input("Exit Price", value=current_price, step=0.01)
+                        notes = st.text_area("Notes")
+                        submitted = st.form_submit_button("Confirm Close")
+                        if submitted:
+                            pnl_final = (exit_price - entry_price) * shares
+                            closed_trade = {
+                                'ticker': ticker,
+                                'entry_date': entry_date,
+                                'entry_price': entry_price,
+                                'exit_date': datetime.now().strftime('%Y-%m-%d'),
+                                'exit_price': exit_price,
+                                'shares': shares,
+                                'pnl': pnl_final,
+                                'notes': notes,
+                                'status': 'CLOSED'
+                            }
+                            st.session_state.trade_history.append(closed_trade)
+                            st.session_state.active_trades.pop(idx)
+                            st.session_state.closing_trade = None
+                            st.success(f"✅ {ticker} closed! P&L: ${pnl_final:.2f}")
+                            st.rerun()
+                
+                st.markdown("---")
+    else:
+        st.info("No active trades. Use the scanner to find picks!")
+
+# ========== TAB 3: JOURNAL ==========
+with tab3:
+    st.title("📓 Trade Journal")
+    st.markdown("---")
+    
+    with st.expander("➕ Add New Trade Manually", expanded=False):
+        with st.form("new_trade"):
+            col1, col2 = st.columns(2)
+            with col1:
+                ticker_input = st.text_input("Ticker", value="AAPL").upper()
+                entry_price = st.number_input("Entry Price", min_value=0.01, step=0.01, value=150.00)
+                shares = st.number_input("Shares", min_value=1, step=1, value=100)
+            with col2:
+                stop_price = st.number_input("Stop Loss Price", min_value=0.01, step=0.01, value=140.00)
+                target_price = st.number_input("Target Price", min_value=0.01, step=0.01, value=165.00)
+                notes = st.text_area("Notes", placeholder="Why did you enter this trade?")
+            
+            submitted = st.form_submit_button("Add Trade")
+            if submitted:
+                new_trade = {
+                    'id': len(st.session_state.active_trades) + 1,
+                    'ticker': ticker_input,
+                    'entry_date': datetime.now().strftime('%Y-%m-%d'),
+                    'entry_price': entry_price,
+                    'shares': shares,
+                    'stop_price': stop_price,
+                    'target_price': target_price,
+                    'status': 'ACTIVE'
+                }
+                st.session_state.active_trades.append(new_trade)
+                st.success(f"✅ {ticker_input} added to active trades!")
+                st.rerun()
+    
+    st.subheader("📊 Trade History")
+    
+    if st.session_state.trade_history:
+        total_trades = len(st.session_state.trade_history)
+        winning_trades = sum(1 for t in st.session_state.trade_history if t['pnl'] and t['pnl'] > 0)
+        total_pnl = sum(t['pnl'] for t in st.session_state.trade_history if t['pnl'])
+        
+        col1, col2, col3 = st.columns(3)
+        col1.metric("📊 Total Trades", total_trades)
+        col2.metric("✅ Win Rate", f"{round(winning_trades/total_trades*100)}%" if total_trades > 0 else "N/A")
+        col3.metric("💰 Total P&L", f"${total_pnl:.2f}")
+        
+        st.markdown("---")
+        
+        for trade in st.session_state.trade_history[::-1]:
+            ticker = trade['ticker']
+            entry_date = trade['entry_date']
+            entry_price = trade['entry_price']
+            exit_date = trade['exit_date']
+            exit_price = trade['exit_price']
+            shares = trade['shares']
+            pnl = trade['pnl']
+            notes = trade['notes']
+            
+            with st.container():
+                col1, col2, col3, col4 = st.columns([2, 1, 1, 2])
+                with col1:
+                    st.subheader(ticker)
+                    st.caption(f"Entry: {entry_date} | Exit: {exit_date if exit_date else 'Open'}")
+                with col2:
+                    st.metric("Entry", f"${entry_price:.2f}")
+                    st.metric("Exit", f"${exit_price:.2f}" if exit_price else "-")
+                with col3:
+                    if pnl:
+                        delta_color = "normal" if pnl > 0 else "inverse"
+                        st.metric("P&L", f"${pnl:.2f}", delta_color=delta_color)
+                    else:
+                        st.metric("P&L", "-")
+                with col4:
+                    if notes:
+                        st.caption(f"📝 {notes}")
+                
+                st.markdown("---")
+    else:
+        st.info("No trades logged yet. Start your trading journey!")
+
+# ========== SIDEBAR - QUICK ACTIONS ==========
+st.sidebar.markdown("---")
+st.sidebar.subheader("⚡ Quick Actions")
+
+if st.sidebar.button("🔄 Refresh Data"):
+    st.cache_data.clear()
+    st.rerun()
+
+st.sidebar.caption(f"📊 Active Trades: {len(st.session_state.active_trades)}")
+st.sidebar.caption(f"📓 Trades History: {len(st.session_state.trade_history)}")
+
+st.sidebar.markdown("---")
+st.sidebar.caption("🔍 Try each strategy to find different setups")
