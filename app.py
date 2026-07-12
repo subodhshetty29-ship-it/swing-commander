@@ -80,7 +80,7 @@ st.sidebar.caption("📊 Data from Yahoo Finance")
 tab1, tab2, tab3 = st.tabs(["📊 Dashboard", "📈 Active Trades", "📓 Journal"])
 
 # ========== DATA FETCH ==========
-@st.cache_data(ttl=300)
+@st.cache_data(ttl=600)
 def fetch_data(ticker, period):
     try:
         stock = yf.Ticker(ticker)
@@ -160,70 +160,33 @@ def calc_position(price, atr, account, risk_pct, atr_mult):
     target_price = price + (stop_distance * 2)
     return shares, stop_price, target_price, risk_dollars
 
-# ========== GET STOCK LIST ==========
+# ========== CURATED WATCHLIST (Quality > Quantity) ==========
 @st.cache_data(ttl=3600)
-def get_fallback_tickers():
-    """Expanded fallback list of 500+ liquid stocks"""
+def get_watchlist():
+    """Curated list of 40 high-quality, liquid stocks across sectors"""
     return [
-        'AAPL', 'MSFT', 'GOOGL', 'AMZN', 'TSLA', 'NVDA', 'META', 'NFLX', 'AMD', 'INTC',
-        'ORCL', 'IBM', 'CSCO', 'QCOM', 'TXN', 'AVGO', 'MU', 'LRCX', 'KLAC', 'AMAT',
-        'ADI', 'NXPI', 'MCHP', 'ON', 'SWKS', 'QRVO', 'MPWR', 'MKSI', 'ENTG', 'TER',
-        'SMCI', 'DELL', 'HPQ', 'WDC', 'STX', 'NTAP', 'PSTG', 'PURE', 'CRWD', 'PANW',
-        'FTNT', 'ZS', 'OKTA', 'NET', 'DDOG', 'MDB', 'SNOW', 'PLTR', 'U', 'PATH',
-        'TEAM', 'WORK', 'ASAN', 'WDAY', 'CRM', 'NOW', 'ADSK', 'ADBE', 'ANSS', 'ROP',
-        'JPM', 'BAC', 'WFC', 'C', 'GS', 'MS', 'V', 'MA', 'PYPL', 'SQ',
-        'AXP', 'COF', 'DFS', 'SYF', 'ALLY', 'USB', 'PNC', 'TFC', 'MTB', 'FITB',
-        'CFG', 'KEY', 'HBAN', 'RF', 'CMA', 'ZION', 'EWBC', 'FHN', 'COLB', 'GBCI',
-        'BLK', 'STT', 'BK', 'TROW', 'BEN', 'IVZ', 'NTRS', 'FDS', 'MORN', 'SEIC',
-        'JNJ', 'PFE', 'MRK', 'ABBV', 'UNH', 'CVS', 'WMT', 'TGT', 'COST', 'HD',
-        'ABT', 'TMO', 'DHR', 'AMGN', 'GILD', 'BMY', 'REGN', 'VRTX', 'BIIB', 'ILMN',
-        'MTD', 'WST', 'ZBH', 'SYN', 'BSX', 'MDT', 'EW', 'ISRG', 'DXCM', 'ALGN',
-        'LOW', 'MCD', 'SBUX', 'NKE', 'DIS', 'CMCSA', 'UBER', 'LYFT', 'DASH', 'GRUB',
-        'ETSY', 'CVNA', 'ABNB', 'BKNG', 'EXPE', 'RCL', 'CCL', 'BA', 'CAT', 'GE',
-        'DE', 'F', 'GM', 'RTX', 'LMT', 'NOC', 'GD', 'HON', 'MMM', 'UTX',
-        'PH', 'EMR', 'ETN', 'ITW', 'CMI', 'PCAR', 'RSG', 'XOM', 'CVX', 'COP',
-        'PSX', 'VLO', 'MPC', 'MRO', 'EOG', 'PXD', 'FANG', 'DVN', 'OXY', 'APA',
-        'T', 'VZ', 'TMUS', 'CHTR', 'DISH', 'ROKU', 'SPOT', 'SIRI', 'AMCX',
-        'FOXA', 'VIAC', 'PARA', 'WBD', 'NYT', 'NEE', 'DUK', 'SO', 'D', 'AEP'
+        # Technology (10)
+        'AAPL', 'MSFT', 'GOOGL', 'AMZN', 'NVDA', 'META', 'NFLX', 'AMD', 'ORCL', 'CSCO',
+        # Financials (5)
+        'JPM', 'BAC', 'GS', 'V', 'MA',
+        # Healthcare (5)
+        'JNJ', 'PFE', 'MRK', 'ABBV', 'UNH',
+        # Consumer (5)
+        'WMT', 'COST', 'HD', 'MCD', 'NKE',
+        # Industrials (5)
+        'BA', 'CAT', 'GE', 'DE', 'HON',
+        # Energy (5)
+        'XOM', 'CVX', 'COP', 'PSX', 'SLB',
+        # Communication (5)
+        'T', 'VZ', 'TMUS', 'CMCSA', 'DIS'
     ]
 
-@st.cache_data(ttl=3600)
-def get_stock_list():
-    """Get a list of stocks to scan with multiple backup sources"""
-    
-    sources = [
-        "https://raw.githubusercontent.com/Ate329/top-us-stock-tickers/main/tickers/all.csv",
-        "https://raw.githubusercontent.com/datasets/s-and-p-500-companies/main/data/constituents.csv",
-        "https://raw.githubusercontent.com/jerryzhujin/US-Stock-Tickers/main/US-Stock-Tickers.txt"
-    ]
-    
-    for url in sources:
-        try:
-            df = pd.read_csv(url)
-            
-            if 'symbol' in df.columns:
-                tickers = df['symbol'].head(300).tolist()
-            elif 'Symbol' in df.columns:
-                tickers = df['Symbol'].head(300).tolist()
-            elif 'Ticker' in df.columns:
-                tickers = df['Ticker'].head(300).tolist()
-            else:
-                tickers = df.iloc[:, 0].head(300).tolist()
-            
-            tickers = [str(t).strip().upper() for t in tickers if str(t).strip()]
-            tickers = [t for t in tickers if t and not t.startswith('#')]
-            
-            if len(tickers) > 50:
-                return tickers
-        except:
-            continue
-    
-    return get_fallback_tickers()
-
-# ========== SCANNER FUNCTIONS ==========
-def scan_momentum(tickers):
+def scan_watchlist():
+    """Scan the curated watchlist (40 stocks, fast and reliable)"""
+    watchlist = get_watchlist()
     results = []
-    for tkr in tickers[:150]:
+    
+    for tkr in watchlist:
         try:
             stock = yf.Ticker(tkr)
             hist = stock.history(period="3mo")
@@ -233,236 +196,127 @@ def scan_momentum(tickers):
                 continue
             
             latest = hist.iloc[-1]
-            market_cap = info.get('marketCap', 0)
             
-            if market_cap < 300_000_000 or market_cap > 200_000_000_000:
-                continue
-            
+            # Calculate indicators
             sma_20 = hist['SMA_20'].iloc[-1]
-            if pd.isna(sma_20) or latest['Close'] <= sma_20:
-                continue
-            
             sma_50 = hist['SMA_50'].iloc[-1]
-            if pd.isna(sma_50) or latest['Close'] <= sma_50:
-                continue
-            
-            is_weekend = datetime.now().weekday() >= 5
-            if not is_weekend:
-                vol_ma = hist['Volume'].rolling(20).mean().iloc[-1]
-                if pd.isna(vol_ma) or latest['Volume'] <= 1.5 * vol_ma:
-                    continue
-                volume_surge = latest['Volume'] / vol_ma
-            else:
-                volume_surge = 1.5
-            
-            rsi = ta.momentum.RSIIndicator(hist['Close'], window=14).rsi().iloc[-1]
-            if pd.isna(rsi) or rsi < 50 or rsi > 80:
-                continue
-            
-            high_20 = hist['High'].tail(20).max()
-            if latest['Close'] < high_20 * 0.95:
-                continue
-            
-            results.append({
-                'Ticker': tkr,
-                'Price': round(latest['Close'], 2),
-                'RSI': round(rsi, 1),
-                'Volume Surge': round(volume_surge, 1),
-                'Market Cap': f"${round(market_cap / 1_000_000_000, 2)}B",
-                'Score': round(50 + (rsi - 50) + (volume_surge * 2), 0),
-                'ATR': round(hist['ATR'].iloc[-1], 2) if 'ATR' in hist.columns else None,
-                'Strategy': 'Momentum Breakout'
-            })
-        except:
-            continue
-    return sorted(results, key=lambda x: x['Score'], reverse=True)[:3]
-
-def scan_mean_reversion(tickers):
-    results = []
-    for tkr in tickers[:150]:
-        try:
-            stock = yf.Ticker(tkr)
-            hist = stock.history(period="3mo")
-            info = stock.info
-            
-            if hist.empty or len(hist) < 50:
-                continue
-            
-            latest = hist.iloc[-1]
-            market_cap = info.get('marketCap', 0)
-            
-            if market_cap < 300_000_000 or market_cap > 200_000_000_000:
-                continue
-            
             sma_200 = hist['SMA_200'].iloc[-1]
-            if pd.isna(sma_200) or latest['Close'] <= sma_200:
-                continue
-            
-            sma_50 = hist['SMA_50'].iloc[-1]
-            if pd.isna(sma_50) or latest['Close'] >= sma_50:
-                continue
-            
-            is_weekend = datetime.now().weekday() >= 5
-            if not is_weekend:
-                vol_ma = hist['Volume'].rolling(20).mean().iloc[-1]
-                if pd.isna(vol_ma) or latest['Volume'] <= 1.2 * vol_ma:
-                    continue
-                volume_surge = latest['Volume'] / vol_ma
-            else:
-                volume_surge = 1.5
-            
             rsi = ta.momentum.RSIIndicator(hist['Close'], window=14).rsi().iloc[-1]
-            if pd.isna(rsi) or rsi < 30 or rsi > 50:
+            vol_ma = hist['Volume'].rolling(20).mean().iloc[-1]
+            atr = hist['ATR'].iloc[-1] if 'ATR' in hist.columns else None
+            
+            if pd.isna(sma_20) or pd.isna(sma_50) or pd.isna(rsi) or pd.isna(vol_ma):
                 continue
             
-            results.append({
-                'Ticker': tkr,
-                'Price': round(latest['Close'], 2),
-                'RSI': round(rsi, 1),
-                'Volume Surge': round(volume_surge, 1),
-                'Market Cap': f"${round(market_cap / 1_000_000_000, 2)}B",
-                'Score': round(50 + (50 - rsi) + (volume_surge), 0),
-                'ATR': round(hist['ATR'].iloc[-1], 2) if 'ATR' in hist.columns else None,
-                'Strategy': 'Mean Reversion'
-            })
-        except:
+            # ===== Scoring System =====
+            score = 0
+            signals = []
+            
+            # 1. Uptrend (Price > 50-day MA)
+            if latest['Close'] > sma_50:
+                score += 20
+                signals.append("Uptrend")
+            
+            # 2. Momentum (Price > 20-day MA)
+            if latest['Close'] > sma_20:
+                score += 15
+                signals.append("Momentum")
+            
+            # 3. Not overbought (RSI < 70)
+            if rsi < 70:
+                score += 15
+                signals.append("Not Overbought")
+            elif rsi < 80:
+                score += 5
+                signals.append("RSI: " + str(round(rsi)))
+            
+            # 4. Volume surge (Volume > 1.2x average)
+            if latest['Volume'] > 1.2 * vol_ma:
+                score += 15
+                signals.append("Volume Surge")
+            
+            # 5. RSI sweet spot (40-65)
+            if 40 <= rsi <= 65:
+                score += 20
+                signals.append("RSI Sweet Spot")
+            
+            # 6. Long-term trend (Price > 200-day MA)
+            if not pd.isna(sma_200) and latest['Close'] > sma_200:
+                score += 15
+                signals.append("Long-term Uptrend")
+            
+            # Only include if score is decent
+            if score >= 50:
+                results.append({
+                    'Ticker': tkr,
+                    'Price': round(latest['Close'], 2),
+                    'RSI': round(rsi, 1),
+                    'Volume Surge': round(latest['Volume'] / vol_ma, 1),
+                    'Score': score,
+                    'Signals': ' | '.join(signals),
+                    'ATR': round(atr, 2) if atr else None
+                })
+            
+            # Small delay to avoid rate limiting
+            time.sleep(0.2)
+            
+        except Exception as e:
             continue
-    return sorted(results, key=lambda x: x['Score'], reverse=True)[:3]
-
-def scan_hybrid(tickers):
-    results = []
-    for tkr in tickers[:150]:
-        try:
-            stock = yf.Ticker(tkr)
-            hist = stock.history(period="4mo")
-            info = stock.info
-            
-            if hist.empty or len(hist) < 50:
-                continue
-            
-            latest = hist.iloc[-1]
-            market_cap = info.get('marketCap', 0)
-            
-            if market_cap < 500_000_000 or market_cap > 100_000_000_000:
-                continue
-            
-            sma_50 = hist['SMA_50'].iloc[-1]
-            if pd.isna(sma_50) or latest['Close'] <= sma_50:
-                continue
-            
-            rsi = ta.momentum.RSIIndicator(hist['Close'], window=14).rsi().iloc[-1]
-            if pd.isna(rsi) or rsi < 40 or rsi > 70:
-                continue
-            
-            is_weekend = datetime.now().weekday() >= 5
-            if not is_weekend:
-                vol_ma = hist['Volume'].rolling(20).mean().iloc[-1]
-                if pd.isna(vol_ma) or latest['Volume'] <= 1.2 * vol_ma:
-                    continue
-                volume_surge = latest['Volume'] / vol_ma
-            else:
-                volume_surge = 1.5
-            
-            pe = info.get('trailingPE', None)
-            roe = info.get('returnOnEquity', None)
-            
-            value_score = 0
-            if pe and pe < 20:
-                value_score += 10
-            if roe and roe > 0.15:
-                value_score += 10
-            
-            if value_score < 5:
-                continue
-            
-            results.append({
-                'Ticker': tkr,
-                'Price': round(latest['Close'], 2),
-                'RSI': round(rsi, 1),
-                'Volume Surge': round(volume_surge, 1),
-                'Market Cap': f"${round(market_cap / 1_000_000_000, 2)}B",
-                'Score': round(50 + (70 - rsi) + (volume_surge * 2) + value_score, 0),
-                'ATR': round(hist['ATR'].iloc[-1], 2) if 'ATR' in hist.columns else None,
-                'Strategy': 'Hybrid (Balanced)'
-            })
-        except:
-            continue
-    return sorted(results, key=lambda x: x['Score'], reverse=True)[:3]
-
-def scan_full_market(strategy):
-    tickers = get_stock_list()
-    results = []
     
-    if strategy == "Momentum Breakout":
-        results = scan_momentum(tickers)
-    elif strategy == "Mean Reversion":
-        results = scan_mean_reversion(tickers)
-    else:
-        results = scan_hybrid(tickers)
-    
-    return results
+    # Sort by Score (highest first)
+    results = sorted(results, key=lambda x: x['Score'], reverse=True)
+    return results[:5]  # Return top 5
 
 # ========== TAB 1: DASHBOARD ==========
 with tab1:
     st.title("📊 Swing Commander")
     st.markdown("---")
     
-    st.subheader("🔍 Full Market Scanner")
-    st.caption("Choose a strategy and scan the entire US market")
-    
-    strategy_options = ["Momentum Breakout", "Mean Reversion", "Hybrid (Balanced)"]
-    selected_strategy = st.selectbox("Select Strategy", strategy_options, index=2)
+    # ===== SCANNER SECTION =====
+    st.subheader("🔍 Scanner")
+    st.caption("Scanning 40 high-quality stocks across all sectors")
     
     col1, col2 = st.columns([1, 4])
     with col1:
-        scan_btn = st.button("🚀 Scan Market", type="primary")
-    
-    with st.expander("📖 Strategy Descriptions"):
-        st.markdown("""
-        **1. Momentum Breakout** (Aggressive)
-        - Finds stocks breaking out to new highs
-        - Best for bull markets
-        - Filters: Price > 20-day & 50-day MA, RSI 50-80, Volume surge
-        
-        **2. Mean Reversion** (Conservative)
-        - Finds oversold stocks due for a bounce
-        - Best for sideways or choppy markets
-        - Filters: Price > 200-day MA but < 50-day MA, RSI 30-50
-        
-        **3. Hybrid (Balanced)**
-        - Combines momentum and value factors
-        - Works in all market conditions
-        - Filters: Price > 50-day MA, RSI 40-70, Value metrics (P/E < 20 or ROE > 15%)
-        """)
+        scan_btn = st.button("🚀 Scan", type="primary")
     
     if scan_btn:
-        with st.spinner(f"Scanning with {selected_strategy} strategy..."):
-            results = scan_full_market(selected_strategy)
+        with st.spinner("Scanning watchlist..."):
+            results = scan_watchlist()
             st.session_state.scan_results = results
         
         if st.session_state.scan_results:
-            st.success(f"✅ Found {len(st.session_state.scan_results)} top picks!")
+            st.success(f"✅ Found {len(st.session_state.scan_results)} setups!")
             st.markdown("---")
             
-            cols = st.columns(3)
-            for idx, stock in enumerate(st.session_state.scan_results):
-                with cols[idx]:
-                    st.subheader(f"🏆 #{idx+1} {stock['Ticker']}")
-                    st.caption(f"Strategy: {stock['Strategy']}")
-                    st.metric("💰 Price", f"${stock['Price']}")
-                    st.metric("📊 RSI", stock['RSI'])
-                    st.metric("📈 Volume Surge", f"{stock['Volume Surge']}x")
-                    st.metric("🏢 Market Cap", stock['Market Cap'])
-                    st.metric("⭐ Score", f"{stock['Score']}/100")
-                    if stock.get('ATR'):
-                        st.caption(f"ATR: ${stock['ATR']}")
-                    
-                    if st.button(f"📈 Analyze {stock['Ticker']}", key=f"quick_{stock['Ticker']}"):
-                        st.session_state.quick_ticker = stock['Ticker']
-                        st.rerun()
+            # Display as a table
+            df_results = pd.DataFrame(st.session_state.scan_results)
+            st.dataframe(
+                df_results,
+                column_config={
+                    "Ticker": st.column_config.TextColumn("Ticker", width="small"),
+                    "Price": st.column_config.NumberColumn("Price", format="$%.2f"),
+                    "RSI": st.column_config.NumberColumn("RSI", format="%.1f"),
+                    "Volume Surge": st.column_config.NumberColumn("Volume Surge", format="%.1fx"),
+                    "Score": st.column_config.ProgressColumn("Score", format="%d", min_value=0, max_value=100),
+                    "Signals": st.column_config.TextColumn("Signals"),
+                    "ATR": st.column_config.NumberColumn("ATR", format="$%.2f")
+                },
+                hide_index=True,
+                use_container_width=True
+            )
+            
+            # Quick analyze buttons
+            st.subheader("📈 Quick Analyze")
+            cols = st.columns(min(len(results), 5))
+            for idx, stock in enumerate(results):
+                if idx < 5:
+                    with cols[idx]:
+                        if st.button(f"{stock['Ticker']}", key=f"quick_{stock['Ticker']}"):
+                            st.session_state.quick_ticker = stock['Ticker']
+                            st.rerun()
         else:
-            st.warning(f"No stocks passed the {selected_strategy} filters today.")
-            st.caption("💡 Tip: Try a different strategy or run during market hours.")
+            st.warning("No setups found today. Try again during market hours.")
     
     st.markdown("---")
     
@@ -476,6 +330,8 @@ with tab1:
         
         if error:
             st.error(f"❌ {error}")
+            if "Too Many Requests" in error:
+                st.info("💡 Yahoo Finance is rate limiting. Wait 60 seconds and try again.")
         else:
             latest = df.iloc[-1]
             prev = df.iloc[-2] if len(df) > 1 else latest
@@ -714,4 +570,4 @@ st.sidebar.caption(f"📊 Active Trades: {len(st.session_state.active_trades)}")
 st.sidebar.caption(f"📓 Trades History: {len(st.session_state.trade_history)}")
 
 st.sidebar.markdown("---")
-st.sidebar.caption("🔍 Try each strategy to find different setups")
+st.sidebar.caption("📌 Watchlist: 40 quality stocks across all sectors")
