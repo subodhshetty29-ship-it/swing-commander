@@ -34,10 +34,8 @@ init_session()
 # ========== SIDEBAR ==========
 st.sidebar.title("⚙️ Pro Settings")
 
-# Stock Input
 ticker = st.sidebar.text_input("Search Stock", value="AAPL").upper()
 
-# Time Period
 period_map = {
     "1 Month": "1mo",
     "3 Months": "3mo",
@@ -51,7 +49,6 @@ period = period_map[selected_period]
 
 st.sidebar.markdown("---")
 
-# ========== POSITION SIZING ==========
 st.sidebar.subheader("💰 Position Sizing")
 
 account_size = st.sidebar.number_input(
@@ -80,7 +77,6 @@ atr_multiplier = st.sidebar.slider(
 
 st.sidebar.markdown("---")
 
-# ========== SCANNER FILTERS ==========
 st.sidebar.subheader("🔍 Scanner Filters")
 
 min_score = st.sidebar.slider(
@@ -88,8 +84,7 @@ min_score = st.sidebar.slider(
     min_value=30,
     max_value=80,
     value=50,
-    step=5,
-    help="Only show stocks with score above this"
+    step=5
 )
 
 st.sidebar.caption("📊 Data from Yahoo Finance")
@@ -125,7 +120,7 @@ def fetch_data(ticker, period):
     except Exception as e:
         return None, None, str(e)
 
-# ========== GET SIGNALS (FIXED) ==========
+# ========== GET SIGNALS ==========
 def get_signals(df):
     if df is None or len(df) < 20:
         return ["Not enough data"], "NEUTRAL", 0
@@ -169,55 +164,32 @@ def get_signals(df):
     
     return signals, rec, score
 
-# ========== GET STOCK UNIVERSE (EXPANDED) ==========
+# ========== GET STOCK UNIVERSE ==========
 @st.cache_data(ttl=3600)
 def get_stock_universe():
-    """Expanded universe of 200 stocks for pro scanning"""
     return [
-        # Mega Caps (20)
         'AAPL', 'MSFT', 'GOOGL', 'AMZN', 'NVDA', 'META', 'TSLA', 'NFLX', 'AMD', 'INTC',
         'ORCL', 'IBM', 'CSCO', 'QCOM', 'TXN', 'AVGO', 'MU', 'LRCX', 'KLAC', 'AMAT',
-        
-        # Financials (20)
         'JPM', 'BAC', 'WFC', 'C', 'GS', 'MS', 'V', 'MA', 'PYPL', 'SQ',
         'AXP', 'COF', 'DFS', 'SYF', 'ALLY', 'USB', 'PNC', 'TFC', 'MTB', 'FITB',
-        
-        # Healthcare (20)
         'JNJ', 'PFE', 'MRK', 'ABBV', 'UNH', 'CVS', 'ABT', 'TMO', 'DHR', 'AMGN',
         'GILD', 'BMY', 'REGN', 'VRTX', 'BIIB', 'ILMN', 'MTD', 'WST', 'ZBH', 'SYK',
-        
-        # Consumer (20)
         'WMT', 'TGT', 'COST', 'HD', 'LOW', 'MCD', 'SBUX', 'NKE', 'DIS', 'CMCSA',
         'UBER', 'LYFT', 'DASH', 'ETSY', 'CVNA', 'ABNB', 'BKNG', 'EXPE', 'RCL', 'CCL',
-        
-        # Industrials (20)
         'BA', 'CAT', 'GE', 'DE', 'F', 'GM', 'RTX', 'LMT', 'NOC', 'GD',
         'HON', 'MMM', 'PH', 'EMR', 'ETN', 'ITW', 'CMI', 'PCAR', 'RSG', 'WM',
-        
-        # Energy (15)
         'XOM', 'CVX', 'COP', 'PSX', 'VLO', 'MPC', 'MRO', 'EOG', 'PXD', 'FANG',
-        'DVN', 'OXY', 'APA', 'HES', 'NBL',
-        
-        # Communication (15)
-        'T', 'VZ', 'TMUS', 'CHTR', 'DISH', 'ROKU', 'SPOT', 'SIRI', 'AMCX',
-        'FOXA', 'VIAC', 'PARA', 'WBD', 'NYT', 'GCI',
-        
-        # Utilities (10)
+        'DVN', 'OXY', 'APA', 'HES', 'NBL', 'T', 'VZ', 'TMUS', 'CHTR', 'DISH',
+        'ROKU', 'SPOT', 'SIRI', 'AMCX', 'FOXA', 'VIAC', 'PARA', 'WBD', 'NYT', 'GCI',
         'NEE', 'DUK', 'SO', 'D', 'AEP', 'EXC', 'SRE', 'PEG', 'PCG', 'ED',
-        
-        # Tech Growth (20)
         'PLTR', 'SNOW', 'DDOG', 'MDB', 'ZS', 'NET', 'CRWD', 'PANW', 'FTNT', 'OKTA',
-        'TEAM', 'WORK', 'ASAN', 'WDAY', 'CRM', 'NOW', 'ADSK', 'ADBE', 'ANSS', 'ROP',
-        
-        # Small/Mid Caps (20)
-        'SMCI', 'DELL', 'HPQ', 'WDC', 'STX', 'NTAP', 'PSTG', 'PURE', 'NMBL', 'VERI',
-        'AFRM', 'UPST', 'SOFI', 'HOOD', 'COIN', 'RIOT', 'MARA', 'SI', 'GLXY', 'HUT'
+        'SMCI', 'DELL', 'HPQ', 'WDC', 'STX', 'NTAP', 'PSTG', 'AFRM', 'UPST', 'SOFI',
+        'HOOD', 'COIN', 'RIOT', 'MARA', 'SI', 'GLXY', 'HUT'
     ]
 
-# ========== GET NEWS (BASIC) ==========
+# ========== GET NEWS ==========
 @st.cache_data(ttl=1800)
 def get_news(ticker):
-    """Fetch basic news headlines for catalyst detection"""
     try:
         url = f"https://query1.finance.yahoo.com/v1/finance/search?q={ticker}"
         response = requests.get(url)
@@ -235,10 +207,8 @@ def get_news(ticker):
 
 # ========== CALCULATE FUNDAMENTAL SCORE ==========
 def calculate_fundamental_score(info):
-    """Calculate a fundamental score from 0-100"""
     score = 0
     
-    # P/E Ratio (lower is better)
     pe = info.get('trailingPE', None)
     if pe:
         if pe < 15:
@@ -248,7 +218,6 @@ def calculate_fundamental_score(info):
         elif pe < 35:
             score += 5
     
-    # ROE (higher is better)
     roe = info.get('returnOnEquity', None)
     if roe:
         if roe > 0.25:
@@ -258,7 +227,6 @@ def calculate_fundamental_score(info):
         elif roe > 0.10:
             score += 5
     
-    # Debt-to-Equity (lower is better)
     debt_to_equity = info.get('debtToEquity', None)
     if debt_to_equity:
         if debt_to_equity < 0.3:
@@ -268,7 +236,6 @@ def calculate_fundamental_score(info):
         elif debt_to_equity < 1.0:
             score += 3
     
-    # Profit Margins (higher is better)
     profit_margin = info.get('profitMargins', None)
     if profit_margin:
         if profit_margin > 0.20:
@@ -278,7 +245,6 @@ def calculate_fundamental_score(info):
         elif profit_margin > 0.05:
             score += 3
     
-    # Revenue Growth (higher is better)
     revenue_growth = info.get('revenueGrowth', None)
     if revenue_growth:
         if revenue_growth > 0.20:
@@ -288,7 +254,6 @@ def calculate_fundamental_score(info):
         elif revenue_growth > 0.05:
             score += 3
     
-    # Earnings Growth (higher is better)
     earnings_growth = info.get('earningsGrowth', None)
     if earnings_growth:
         if earnings_growth > 0.20:
@@ -331,8 +296,6 @@ def calc_position(price, atr, account, risk_pct, atr_mult):
 
 # ========== PRO SCANNER ==========
 def pro_scan():
-    """Professional scanner combining technicals + fundamentals + catalyst check"""
-    
     universe = get_stock_universe()
     results = []
     is_weekend = datetime.now().weekday() >= 5
@@ -357,7 +320,6 @@ def pro_scan():
             latest = hist.iloc[-1]
             last_5 = hist.tail(5)
             
-            # ===== TECHNICAL SCORE (0-100) =====
             sma_20 = hist['SMA_20'].iloc[-1]
             sma_50 = hist['SMA_50'].iloc[-1]
             sma_200 = hist['SMA_200'].iloc[-1]
@@ -371,7 +333,6 @@ def pro_scan():
             tech_score = 0
             tech_signals = []
             
-            # Price > 50-day MA
             if latest['Close'] > sma_50:
                 tech_score += 25
                 tech_signals.append("Uptrend")
@@ -379,19 +340,16 @@ def pro_scan():
                 tech_score += 12
                 tech_signals.append("Near MA")
             
-            # Price > 20-day MA (momentum)
             if latest['Close'] > sma_20:
                 tech_score += 15
                 tech_signals.append("Momentum")
             
-            # RSI sweet spot
             if 30 <= rsi <= 65:
                 tech_score += 20
                 tech_signals.append(f"RSI: {round(rsi)}")
             elif rsi < 70:
                 tech_score += 8
             
-            # Volume (skip on weekends)
             if not is_weekend:
                 if vol_ma > 0 and latest['Volume'] > 1.2 * vol_ma:
                     tech_score += 15
@@ -402,40 +360,33 @@ def pro_scan():
                 tech_score += 10
                 tech_signals.append("Weekend Mode")
             
-            # Recent strength
             if len(last_5) >= 5:
                 if latest['Close'] > last_5['Close'].mean():
                     tech_score += 10
                     tech_signals.append("Recent Strength")
             
-            # Long-term trend
             if not pd.isna(sma_200) and latest['Close'] > sma_200:
                 tech_score += 15
                 tech_signals.append("Long-term Trend")
             
             tech_score = min(tech_score, 100)
             
-            # ===== FUNDAMENTAL SCORE (0-100) =====
             fund_score = calculate_fundamental_score(info)
             
-            # ===== CATALYST CHECK (Simple) =====
             catalyst_score = 0
             catalyst_signals = []
             
-            # Check for news
             news = get_news(tkr)
             if news:
                 catalyst_score += 20
                 catalyst_signals.append("Recent News")
             
-            # Check for earnings date
             next_earnings = info.get('earningsDate', None)
             if next_earnings:
                 if isinstance(next_earnings, list) and len(next_earnings) > 0:
                     catalyst_score += 10
                     catalyst_signals.append("Earnings Upcoming")
             
-            # Check for high short interest
             short_ratio = info.get('shortRatio', None)
             if short_ratio and short_ratio > 3:
                 catalyst_score += 10
@@ -443,15 +394,11 @@ def pro_scan():
             
             catalyst_score = min(catalyst_score, 100)
             
-            # ===== FINAL SCORE =====
-            # Weighted: Tech (50%), Fundamental (30%), Catalyst (20%)
             final_score = (tech_score * 0.5) + (fund_score * 0.3) + (catalyst_score * 0.2)
             
-            # ===== MARKET CAP CHECK =====
             market_cap = info.get('marketCap', 0)
             market_cap_display = f"${round(market_cap / 1_000_000_000, 2)}B" if market_cap > 1_000_000_000 else f"${round(market_cap / 1_000_000, 0)}M"
             
-            # Only include if score >= min_score
             if final_score >= st.session_state.get('min_score', 50):
                 results.append({
                     'Ticker': tkr,
@@ -478,7 +425,6 @@ def pro_scan():
     progress_bar.empty()
     status_text.empty()
     
-    # Sort by Total Score (descending)
     results = sorted(results, key=lambda x: x['Total Score'], reverse=True)
     return results
 
@@ -494,7 +440,6 @@ with tab1:
     with col1:
         scan_btn = st.button("🚀 Run Pro Scan", type="primary")
     
-    # Store min_score in session
     st.session_state['min_score'] = min_score
     
     if scan_btn:
@@ -506,7 +451,6 @@ with tab1:
             st.success(f"✅ Found {len(st.session_state.scan_results)} stocks matching your criteria!")
             st.markdown("---")
             
-            # Display as a professional table
             df_results = pd.DataFrame(st.session_state.scan_results)
             
             st.dataframe(
@@ -532,7 +476,6 @@ with tab1:
             
             st.markdown("---")
             
-            # Quick analyze buttons
             st.subheader("📈 Quick Analyze")
             top_picks = df_results.head(5)['Ticker'].tolist()
             cols = st.columns(len(top_picks))
@@ -546,7 +489,6 @@ with tab1:
     
     st.markdown("---")
     
-    # ===== INDIVIDUAL STOCK ANALYSIS =====
     analysis_ticker = st.session_state.quick_ticker if st.session_state.quick_ticker else ticker
     
     if analysis_ticker:
@@ -571,7 +513,6 @@ with tab1:
             pe = info.get('trailingPE', None)
             col5.metric("🧮 P/E", f"{pe:.2f}" if pe else "N/A")
             
-            # Show fundamental summary
             st.subheader("📊 Fundamental Snapshot")
             fund_score = calculate_fundamental_score(info)
             
@@ -581,7 +522,6 @@ with tab1:
             col3.metric("📊 Profit Margin", f"{round(info.get('profitMargins', 0) * 100, 1)}%" if info.get('profitMargins') else "N/A")
             col4.metric("📊 Fundamental Score", f"{fund_score}/100")
             
-            # Position Sizing
             current_atr = latest['ATR'] if 'ATR' in df.columns else None
             if current_atr and not pd.isna(current_atr) and current_atr > 0:
                 shares, stop_price, target_price, risk_dollars = calc_position(
@@ -618,7 +558,6 @@ with tab1:
                     st.success(f"✅ {analysis_ticker} added to active trades!")
                     st.rerun()
             
-            # News
             st.subheader("📰 News")
             news_headlines = get_news(analysis_ticker)
             if news_headlines:
@@ -627,7 +566,6 @@ with tab1:
             else:
                 st.caption("No recent news found.")
             
-            # Signals
             signals, rec, score = get_signals(df)
             
             col_a, col_b = st.columns([2, 1])
@@ -645,7 +583,6 @@ with tab1:
                 else:
                     st.info(f"### {rec}")
             
-            # Chart
             st.subheader("📉 Price Chart")
             fig = go.Figure()
             fig.add_trace(go.Scatter(x=df.index, y=df['Close'], mode='lines', name='Close', line=dict(color='white', width=2)))
@@ -785,4 +722,51 @@ with tab3:
         
         for trade in st.session_state.trade_history[::-1]:
             ticker = trade['ticker']
-            entry_date = trade['
+            entry_date = trade['entry_date']
+            entry_price = trade['entry_price']
+            exit_date = trade['exit_date']
+            exit_price = trade['exit_price']
+            shares = trade['shares']
+            pnl = trade['pnl']
+            notes = trade['notes']
+            
+            with st.container():
+                col1, col2, col3, col4 = st.columns([2, 1, 1, 2])
+                with col1:
+                    st.subheader(ticker)
+                    st.caption(f"Entry: {entry_date} | Exit: {exit_date if exit_date else 'Open'}")
+                with col2:
+                    st.metric("Entry", f"${entry_price:.2f}")
+                    st.metric("Exit", f"${exit_price:.2f}" if exit_price else "-")
+                with col3:
+                    if pnl:
+                        delta_color = "normal" if pnl > 0 else "inverse"
+                        st.metric("P&L", f"${pnl:.2f}", delta_color=delta_color)
+                    else:
+                        st.metric("P&L", "-")
+                with col4:
+                    if notes:
+                        st.caption(f"📝 {notes}")
+                
+                st.markdown("---")
+    else:
+        st.info("No trades logged yet. Start your trading journey!")
+
+# ========== SIDEBAR - QUICK ACTIONS ==========
+st.sidebar.markdown("---")
+st.sidebar.subheader("⚡ Quick Actions")
+
+if st.sidebar.button("🔄 Refresh Data"):
+    st.cache_data.clear()
+    st.rerun()
+
+st.sidebar.caption(f"📊 Active Trades: {len(st.session_state.active_trades)}")
+st.sidebar.caption(f"📓 Trades History: {len(st.session_state.trade_history)}")
+
+st.sidebar.markdown("---")
+is_weekend = datetime.now().weekday() >= 5
+if is_weekend:
+    st.sidebar.caption("📌 Weekend Mode: Volume filter disabled")
+else:
+    st.sidebar.caption("📌 Market Hours: 9:30 AM - 4:00 PM EST")
+st.sidebar.caption(f"💰 Account: ${account_size:,}")
