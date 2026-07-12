@@ -135,10 +135,10 @@ def get_signals(df):
     
     if not pd.isna(latest['RSI']):
         if latest['RSI'] < 30:
-            signals.append("🟢 RSI Oversold - BUY Signal")
+            signals.append("🟢 RSI Oversold (<30) - BUY Signal")
             score += 1
         elif latest['RSI'] > 70:
-            signals.append("🔴 RSI Overbought - SELL Signal")
+            signals.append("🔴 RSI Overbought (>70) - SELL Signal")
             score -= 1
         else:
             signals.append(f"⚪ RSI: {latest['RSI']:.1f}")
@@ -177,42 +177,54 @@ def calc_position(price, atr, account, risk_pct, atr_mult):
     target_price = price + (stop_distance * 2)
     return shares, stop_price, target_price, risk_dollars
 
-# ========== FULL MARKET SCANNER (Using Yahoo Finance Screener) ==========
+# ========== FULL MARKET SCANNER ==========
+@st.cache_data(ttl=3600)
+def get_stock_list():
+    """Get list of stocks to scan"""
+    try:
+        # Try to use yfscreen first
+        try:
+            import yfscreen as yfs
+            filters = [
+                ["eq", ["region", "us"]],
+                ["gt", ["dayvolume", 500000]]
+            ]
+            query = yfs.create_query(filters)
+            payload = yfs.create_payload("equity", query)
+            data = yfs.get_data(payload)
+            return data[:150]
+        except:
+            # Fallback to GitHub list
+            url = "https://raw.githubusercontent.com/Ate329/top-us-stock-tickers/main/tickers/all.csv"
+            df = pd.read_csv(url)
+            return df['symbol'].head(150).tolist()
+    except:
+        # Final fallback: popular stocks
+        return ['AAPL', 'MSFT', 'GOOGL', 'AMZN', 'TSLA', 'NVDA', 'META', 'NFLX', 'AMD', 'INTC',
+                'JPM', 'BAC', 'WFC', 'C', 'GS', 'MS', 'V', 'MA', 'PYPL', 'SQ',
+                'JNJ', 'PFE', 'MRK', 'ABBV', 'UNH', 'CVS', 'WMT', 'TGT', 'COST', 'HD',
+                'XOM', 'CVX', 'COP', 'SLB', 'BA', 'CAT', 'DE', 'GE', 'F', 'GM']
+
 def scan_full_market():
-    """Scan the entire US market using Yahoo Finance screener"""
+    """Scan the entire US market for swing trading opportunities"""
     
     results = []
     
     try:
-        # Use Yahoo Finance screener via yfscreen
-        # First, try to import yfscreen
-        try:
-            import yfscreen as yfs
-            
-            # Set filters: US stocks, market cap $500M to $100B, volume > 1M
-            filters = [
-                ["eq", ["region", "us"]],
-                ["btwn", ["intradaymarketcap", 500000000, 100000000000]],
-                ["gt", ["dayvolume", 1000000]]
-            ]
-            
-            query = yfs.create_query(filters)
-            payload = yfs.create_payload("equity", query)
-            data = yfs.get_data(payload)
-            
-            # Data comes back as a list of tickers
-            tickers_to_scan = data[:200]  # Limit to 200 for speed
-            
-        except ImportError:
-            # Fallback: Use the GitHub ticker list
-            st.info("Using GitHub ticker list (install yfscreen for faster scanning)")
-            url = "https://raw.githubusercontent.com/Ate329/top-us-stock-tickers/main/tickers/all.csv"
-            df = pd.read_csv(url)
-            tickers_to_scan = df['symbol'].head(200).tolist()
+        # Get stock list
+        tickers_to_scan = get_stock_list()
         
-        # Now scan each ticker
         progress_bar = st.progress(0)
         status_text = st.empty()
+        
+        # Track debug info
+        debug_data = {
+            'total': 0,
+            'passed_ma': 0,
+            'passed_volume': 0,
+            'passed_rsi': 0,
+            'passed_all': 0
+        }
         
         for i, tkr in enumerate(tickers_to_scan):
             tkr = tkr.strip().upper()
@@ -221,57 +233,87 @@ def scan_full_market():
             
             try:
                 stock = yf.Ticker(tkr)
-                hist = stock.history(period="3mo")
+                hist = stock.history(period="4mo")
                 info = stock.info
                 
                 if hist.empty or len(hist) < 50:
                     continue
                 
+                debug_data['total'] += 1
                 latest = hist.iloc[-1]
+                
+                # Get market cap
                 market_cap = info.get('marketCap', 0)
-                
-                if market_cap < 500_000_000 or market_cap > 100_000_000_000:
+                if market_cap < 200_000_000 or market_cap > 200_000_000_000:
                     continue
                 
-                # Filter 1: Price > 50-day MA
+                # ----- FILTER 1: Price above 50-day MA -----
                 sma_50 = hist['SMA_50'].iloc[-1]
-                if pd.isna(sma_50) or latest['Close'] <= sma_50:
+                if pd.isna(sma_50):
                     continue
                 
-                # Filter 2: Volume > 1.5x average
+                # Looser: price above 95% of 50-day MA
+                if latest['Close'] < sma_50 * 0.95:
+                    continue
+                debug_data['passed_ma'] += 1
+                
+                # ----- FILTER 2: Volume surge -----
                 vol_ma = hist['Volume'].rolling(20).mean().iloc[-1]
-                if pd.isna(vol_ma) or latest['Volume'] <= 1.5 * vol_ma:
+                if pd.isna(vol_ma) or vol_ma == 0:
                     continue
                 
-                # Filter 3: RSI between 40 and 70
+                # Looser: volume above 1.1x average
+                if latest['Volume'] <= 1.1 * vol_ma:
+                    continue
+                debug_data['passed_volume'] += 1
+                
+                # ----- FILTER 3: RSI sweet spot -----
                 rsi = ta.momentum.RSIIndicator(hist['Close'], window=14).rsi().iloc[-1]
-                if pd.isna(rsi) or rsi < 40 or rsi > 70:
+                if pd.isna(rsi):
                     continue
                 
-                # Passed all filters!
+                # Wider range: 30 to 75
+                if rsi < 30 or rsi > 75:
+                    continue
+                debug_data['passed_rsi'] += 1
+                
+                # ----- PASSED ALL FILTERS! -----
+                debug_data['passed_all'] += 1
+                
+                # Calculate score
+                volume_ratio = latest['Volume'] / vol_ma if vol_ma > 0 else 1
+                score = 50 + (70 - rsi) + (volume_ratio * 5)
+                score = min(100, max(0, score))
+                
                 results.append({
                     'Ticker': tkr,
                     'Price': round(latest['Close'], 2),
                     'RSI': round(rsi, 1),
-                    'Volume Surge': round(latest['Volume'] / vol_ma, 1) if vol_ma > 0 else 0,
+                    'Volume Surge': round(volume_ratio, 1),
                     'Market Cap': f"${round(market_cap / 1_000_000_000, 2)}B",
-                    'Score': min(100, 50 + (70 - rsi) + (latest['Volume'] / vol_ma if vol_ma > 0 else 0))
+                    'Score': round(score, 0),
+                    'ATR': round(hist['ATR'].iloc[-1], 2) if 'ATR' in hist.columns else None
                 })
                 
-                # Stop if we have enough
-                if len(results) >= 10:
-                    break
-                
-            except Exception:
+            except Exception as e:
                 continue
         
         progress_bar.empty()
         status_text.empty()
         
+        # Show debug info
+        st.info(
+            f"📊 Scan Results: {debug_data['total']} stocks checked | "
+            f"✅ Passed MA: {debug_data['passed_ma']} | "
+            f"✅ Passed Volume: {debug_data['passed_volume']} | "
+            f"✅ Passed RSI: {debug_data['passed_rsi']} | "
+            f"🏆 Final Picks: {debug_data['passed_all']}"
+        )
+        
     except Exception as e:
         st.error(f"Scanner error: {str(e)}")
     
-    # Sort by Score and return top 3
+    # Sort by score and return top 3
     results = sorted(results, key=lambda x: x['Score'], reverse=True)
     return results[:3]
 
@@ -282,39 +324,55 @@ with tab1:
     
     # ===== FULL MARKET SCANNER =====
     st.subheader("🔍 Full Market Scanner")
-    st.caption("Scanning the entire US market for the best setups")
+    st.caption("Scanning the entire US market for the best swing trading setups")
     
     col1, col2 = st.columns([1, 4])
     with col1:
         scan_btn = st.button("🚀 Scan Market", type="primary")
     
     if scan_btn:
-        with st.spinner("Scanning 200+ stocks across the entire market..."):
+        with st.spinner("Scanning the entire market..."):
             results = scan_full_market()
         
         if results:
             st.success(f"✅ Found {len(results)} top picks from the entire market!")
+            st.markdown("---")
             
-            # Display top 3 picks
+            # Display top 3 picks as large cards
             cols = st.columns(3)
             for idx, stock in enumerate(results):
                 with cols[idx]:
-                    st.subheader(f"#{idx+1} {stock['Ticker']}")
-                    st.metric("Price", f"${stock['Price']}")
-                    st.metric("RSI", stock['RSI'])
-                    st.metric("Volume Surge", f"{stock['Volume Surge']}x")
-                    st.caption(f"Market Cap: {stock['Market Cap']}")
-                    st.caption(f"Score: {stock['Score']:.0f}/100")
+                    st.subheader(f"🏆 #{idx+1} {stock['Ticker']}")
+                    st.metric("💰 Price", f"${stock['Price']}")
+                    st.metric("📊 RSI", stock['RSI'])
+                    st.metric("📈 Volume Surge", f"{stock['Volume Surge']}x")
+                    st.metric("🏢 Market Cap", stock['Market Cap'])
+                    st.metric("⭐ Score", f"{stock['Score']}/100")
+                    if stock.get('ATR'):
+                        st.caption(f"ATR: ${stock['ATR']}")
+                    
+                    # Quick trade button
+                    if st.button(f"📈 Analyze {stock['Ticker']}", key=f"quick_{stock['Ticker']}"):
+                        st.session_state['quick_ticker'] = stock['Ticker']
+                        st.rerun()
         else:
-            st.warning("No stocks passed the filters today. Try again later.")
+            st.warning("No stocks passed the filters today. Try again later or widen the filters.")
+            st.caption("💡 Tip: Run this during market hours for better results.")
     
     st.markdown("---")
     
     # ===== INDIVIDUAL STOCK ANALYSIS =====
-    if ticker:
-        st.subheader(f"📊 {ticker} Analysis")
+    # Check if we have a quick ticker from the scan
+    quick_ticker = st.session_state.get('quick_ticker', ticker)
+    if quick_ticker:
+        analysis_ticker = quick_ticker
+    else:
+        analysis_ticker = ticker
+    
+    if analysis_ticker:
+        st.subheader(f"📊 {analysis_ticker} Analysis")
         
-        df, info, error = fetch_data(ticker, period)
+        df, info, error = fetch_data(analysis_ticker, period)
         
         if error:
             st.error(f"❌ {error}")
@@ -335,8 +393,8 @@ with tab1:
             col5.metric("🧮 P/E", f"{pe:.2f}" if pe else "N/A")
             
             # Position Sizing
-            current_atr = latest['ATR']
-            if not pd.isna(current_atr) and current_atr > 0:
+            current_atr = latest['ATR'] if 'ATR' in df.columns else None
+            if current_atr and not pd.isna(current_atr) and current_atr > 0:
                 shares, stop_price, target_price, risk_dollars = calc_position(
                     latest['Close'], current_atr, account_size, risk_percent, atr_multiplier
                 )
@@ -347,6 +405,15 @@ with tab1:
                 col_b.metric("🛑 Stop Loss", f"${stop_price:.2f}")
                 col_c.metric("🎯 Target", f"${target_price:.2f}")
                 col_d.metric("⚠️ Max Risk", f"${risk_dollars:,.2f}")
+                
+                # Add to trade button
+                if st.button(f"➕ Add {analysis_ticker} to Active Trades"):
+                    st.session_state['adding_trade'] = analysis_ticker
+                    st.session_state['add_entry'] = latest['Close']
+                    st.session_state['add_stop'] = stop_price
+                    st.session_state['add_target'] = target_price
+                    st.session_state['add_shares'] = shares
+                    st.rerun()
             
             # Signals
             signals, rec, score = get_signals(df)
@@ -394,7 +461,7 @@ with tab2:
             trade_id, ticker, entry_date, entry_price, shares, stop_price, target_price, status = trade
             
             stock = yf.Ticker(ticker)
-            hist = stock.history(period="1d")
+            hist = stock.history(period="5d")
             if not hist.empty:
                 current_price = hist['Close'].iloc[-1]
                 pnl = (current_price - entry_price) * shares
@@ -407,34 +474,29 @@ with tab2:
                 days_held = 0
             
             with st.container():
+                st.subheader(f"📊 {ticker}")
                 col1, col2, col3, col4, col5 = st.columns([2, 1, 1, 1, 1])
                 with col1:
-                    st.subheader(ticker)
                     st.caption(f"Entry: {entry_date} | Days Held: {days_held}")
+                    st.caption(f"Shares: {shares:,}")
                 with col2:
                     st.metric("Entry", f"${entry_price:.2f}")
                 with col3:
                     st.metric("Current", f"${current_price:.2f}")
                 with col4:
-                    delta_color = "normal"
-                    if pnl > 0:
-                        delta_color = "normal"
-                    elif pnl < 0:
-                        delta_color = "inverse"
+                    delta_color = "normal" if pnl >= 0 else "inverse"
                     st.metric("P&L", f"${pnl:.2f}", f"{pnl_pct:+.1f}%", delta_color=delta_color)
                 with col5:
                     st.metric("Stop", f"${stop_price:.2f}")
                     st.caption(f"Target: ${target_price:.2f}")
                 
-                col1, col2, col3 = st.columns([1, 1, 3])
+                col1, col2 = st.columns([1, 4])
                 with col1:
-                    if st.button(f"✏️ Edit {ticker}", key=f"edit_{trade_id}"):
-                        st.info("Edit coming soon")
-                with col2:
                     if st.button(f"✅ Close {ticker}", key=f"close_{trade_id}"):
                         st.session_state['closing_trade'] = trade_id
                         st.rerun()
                 
+                # Close trade form
                 if st.session_state.get('closing_trade') == trade_id:
                     with st.form(key=f"close_form_{trade_id}"):
                         exit_price = st.number_input("Exit Price", value=current_price, step=0.01)
@@ -448,19 +510,22 @@ with tab2:
                             ''', (datetime.now().strftime('%Y-%m-%d'), exit_price, pnl_final, notes, trade_id))
                             conn.commit()
                             st.session_state['closing_trade'] = None
-                            st.success(f"✅ {ticker} closed!")
+                            st.success(f"✅ {ticker} closed! P&L: ${pnl_final:.2f}")
                             st.rerun()
                 
                 st.markdown("---")
     else:
-        st.info("No active trades. Scan for picks and start trading!")
+        st.info("No active trades. Use the scanner to find picks!")
+
+    conn.close()
 
 # ========== TAB 3: JOURNAL ==========
 with tab3:
     st.title("📓 Trade Journal")
     st.markdown("---")
     
-    with st.expander("➕ Add New Trade"):
+    # Add new trade form
+    with st.expander("➕ Add New Trade", expanded=False):
         with st.form("new_trade"):
             col1, col2 = st.columns(2)
             with col1:
@@ -470,7 +535,7 @@ with tab3:
             with col2:
                 stop_price = st.number_input("Stop Loss Price", min_value=0.01, step=0.01)
                 target_price = st.number_input("Target Price", min_value=0.01, step=0.01)
-                notes = st.text_area("Notes")
+                notes = st.text_area("Notes", placeholder="Why did you enter this trade?")
             
             submitted = st.form_submit_button("Add Trade")
             if submitted:
@@ -497,6 +562,18 @@ with tab3:
     conn.close()
     
     if history:
+        # Calculate summary stats
+        total_trades = len(history)
+        winning_trades = sum(1 for t in history if t[6] and t[6] > 0)
+        total_pnl = sum(t[6] for t in history if t[6])
+        
+        col1, col2, col3 = st.columns(3)
+        col1.metric("📊 Total Trades", total_trades)
+        col2.metric("✅ Win Rate", f"{round(winning_trades/total_trades*100)}%" if total_trades > 0 else "N/A")
+        col3.metric("💰 Total P&L", f"${total_pnl:.2f}")
+        
+        st.markdown("---")
+        
         for trade in history:
             ticker, entry_date, entry_price, exit_date, exit_price, shares, pnl, notes, status = trade
             
@@ -505,6 +582,7 @@ with tab3:
                 with col1:
                     st.subheader(ticker)
                     st.caption(f"Entry: {entry_date} | Exit: {exit_date if exit_date else 'Open'}")
+                    st.caption(f"Status: {status}")
                 with col2:
                     st.metric("Entry", f"${entry_price:.2f}")
                     st.metric("Exit", f"${exit_price:.2f}" if exit_price else "-")
@@ -520,7 +598,7 @@ with tab3:
                 
                 st.markdown("---")
     else:
-        st.info("No trades logged yet.")
+        st.info("No trades logged yet. Start your trading journey!")
 
 # ========== SIDEBAR - QUICK ACTIONS ==========
 st.sidebar.markdown("---")
@@ -536,3 +614,6 @@ c.execute("SELECT COUNT(*) FROM trades WHERE status = 'ACTIVE'")
 active_count = c.fetchone()[0]
 conn.close()
 st.sidebar.caption(f"📊 Active Trades: {active_count}")
+
+st.sidebar.markdown("---")
+st.sidebar.caption("🔍 Tip: Run scanner during market hours for best results")
