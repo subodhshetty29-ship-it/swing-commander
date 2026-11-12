@@ -176,6 +176,10 @@ fractional = st.sidebar.checkbox(
 st.sidebar.markdown("---")
 st.sidebar.subheader("🔍 Scanner")
 top_n_plans = st.sidebar.slider("Max New Plans per Scan", 1, 5, 3)
+block_unknown_earnings = st.sidebar.checkbox(
+    "Block plans with unknown earnings date", value=False,
+    help="When Yahoo can't provide the next earnings date, veto the plan instead of "
+         "showing it with a warning.")
 st.sidebar.caption("📊 Data from Yahoo Finance")
 
 # ========== INDICATORS ==========
@@ -234,6 +238,33 @@ def sector_counts():
 
 def open_tickers():
     return {t['ticker'] for t in st.session_state.active_trades}
+
+EARNINGS_FIELDS = ('earningsTimestamp', 'earningsTimestampStart', 'earningsTimestampEnd')
+
+def next_earnings_days(tkr):
+    """Days until the NEXT earnings report, or None if it can't be determined.
+    Yahoo's 'earningsTimestamp' is often the LAST report, so all three
+    timestamp fields are read and the soonest one still ahead is used.
+    Falls back to .calendar when .info fails (e.g. a transient 401)."""
+    today = datetime.now().date()
+    dates = []
+    for attempt in range(2):
+        try:
+            info = yf.Ticker(tkr).info or {}
+            dates = [datetime.fromtimestamp(info[k]).date()
+                     for k in EARNINGS_FIELDS if isinstance(info.get(k), (int, float))]
+            del info
+            break
+        except Exception:
+            time.sleep(1 + attempt)
+    if not any(d >= today for d in dates):
+        try:
+            cal = yf.Ticker(tkr).calendar or {}
+            dates += [d for d in cal.get('Earnings Date', []) if hasattr(d, 'year')]
+        except Exception:
+            pass
+    upcoming = sorted(d for d in dates if d >= today)
+    return (upcoming[0] - today).days if upcoming else None
 
 def floor_shares(qty):
     """Round a share quantity DOWN: to whole shares, or to 0.001 when fractional.
@@ -444,20 +475,16 @@ def _run_tracker_inner():
 
         # Only NOW spend a slow .info call — solely for the earnings date
         days_to_earn = None
-        if veto is None and earnings_checks < MAX_EARNINGS_CHECKS:
-            status.text(f"Checking earnings date: {tkr}")
-            earnings_checks += 1
-            try:
-                info = yf.Ticker(tkr).info or {}
-                ts = info.get('earningsTimestamp')
-                if ts:
-                    days_to_earn = (datetime.fromtimestamp(ts) - datetime.now()).days
-                    if 0 <= days_to_earn <= EARNINGS_VETO_DAYS:
-                        veto = f"Earnings in {days_to_earn}d (gap risk)"
-                del info
-            except Exception:
-                pass  # earnings unknown — allow, but flag below
-            gc.collect()
+        if veto is None:
+            if earnings_checks < MAX_EARNINGS_CHECKS:
+                status.text(f"Checking earnings date: {tkr}")
+                earnings_checks += 1
+                days_to_earn = next_earnings_days(tkr)
+                gc.collect()
+            if days_to_earn is not None and days_to_earn <= EARNINGS_VETO_DAYS:
+                veto = f"Earnings in {days_to_earn}d (gap risk)"
+            elif days_to_earn is None and block_unknown_earnings:
+                veto = "Earnings date unknown (blocked by setting)"
 
         if veto:
             vetoed.append({'Ticker': tkr, 'Composite': round(row['composite']),
@@ -622,7 +649,14 @@ with tab1:
                         st.caption(f"Composite {plan['composite']} (RS %ile {plan['rs_pct']} · Setup {plan['setup']}) · Last close ${plan['last_close']}")
                     with h2:
                         earn = plan.get('days_to_earnings')
-                        st.caption(f"Earnings: {'in ' + str(earn) + 'd' if earn is not None else 'unknown/none near'}")
+                        if earn is not None:
+                            st.caption(f"✅ Next earnings in {earn}d")
+                        else:
+                            st.caption("⚠️ Earnings date unknown")
+                    if plan.get('days_to_earnings') is None:
+                        st.warning(f"⚠️ Couldn't confirm {plan['ticker']}'s next earnings date, so the "
+                                   f"{EARNINGS_VETO_DAYS}-day earnings veto was NOT applied. Check the date "
+                                   f"yourself before placing this order.")
 
                     p1, p2, p3, p4, p5, p6 = st.columns(6)
                     p1.metric("🎯 Buy Stop", f"${plan['entry']:.2f}")
