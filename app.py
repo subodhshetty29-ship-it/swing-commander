@@ -39,6 +39,9 @@ MAX_POSITION_PCT = 0.25
 MAX_EARNINGS_CHECKS = 15     # cap on slow .info fetches per scan
 ENTRY_BUFFER = 1.001
 DOWNLOAD_CHUNK = 25          # tickers per yf.download batch
+FRACTION_DECIMALS = 3        # Fidelity fractional shares go to 0.001
+MIN_FRACTIONAL_ORDER = 1.00  # Fidelity's minimum fractional order ($)
+FRACTIONAL_DEFAULT_BELOW = 5_000  # fractional sizing on by default under this account size
 
 TRADES_FILE = Path("trades.json")
 SCAN_FILE = Path("last_scan.json")
@@ -164,6 +167,11 @@ risk_percent = st.sidebar.slider("Risk per Trade (%)", 0.25, 3.0, 1.0, 0.25)
 atr_multiplier = st.sidebar.slider("Initial Stop (ATR x)", 1.0, 3.0, 2.0, 0.5)
 max_heat_pct = st.sidebar.slider("Max Portfolio Heat (%)", 2.0, 10.0, 5.0, 0.5,
                                  help="Total $ at risk across ALL open trades, as % of account.")
+fractional = st.sidebar.checkbox(
+    "Allow fractional shares", value=account_size < FRACTIONAL_DEFAULT_BELOW,
+    help="Size positions to 0.001 share so small accounts can trade high-priced stocks. "
+         "Fidelity fractional orders must be market or limit orders (no buy-stops), "
+         "so you enter manually once price crosses the trigger.")
 
 st.sidebar.markdown("---")
 st.sidebar.subheader("🔍 Scanner")
@@ -226,6 +234,19 @@ def sector_counts():
 
 def open_tickers():
     return {t['ticker'] for t in st.session_state.active_trades}
+
+def floor_shares(qty):
+    """Round a share quantity DOWN: to whole shares, or to 0.001 when fractional.
+    Rounding down keeps actual risk at or below the risk budget."""
+    if fractional:
+        step = 10 ** FRACTION_DECIMALS
+        return int(qty * step + 1e-9) / step
+    return int(qty)
+
+def fmt_shares(qty):
+    if float(qty).is_integer():
+        return f"{int(qty):,}"
+    return f"{qty:,.{FRACTION_DECIMALS}f}".rstrip('0').rstrip('.')
 
 # ========== MEMORY-SAFE CHUNKED DOWNLOAD ==========
 def download_chunked(tickers, period="1y"):
@@ -395,11 +416,12 @@ def _run_tracker_inner():
         stop = round(entry - stop_dist, 2)
         target = round(entry + 2 * stop_dist, 2)
         risk_dollars = account_size * (risk_percent / 100)
-        shares = int(risk_dollars / stop_dist) if stop_dist > 0 else 0
-        max_shares_by_value = int((account_size * MAX_POSITION_PCT) / entry)
+        shares = floor_shares(risk_dollars / stop_dist) if stop_dist > 0 else 0
+        max_shares_by_value = floor_shares((account_size * MAX_POSITION_PCT) / entry)
         capped = shares > max_shares_by_value
         shares = min(shares, max_shares_by_value)
         actual_risk = round(shares * stop_dist, 2)
+        is_fractional = not float(shares).is_integer()
 
         # Cheap local vetoes first (no network)
         veto = None
@@ -413,8 +435,10 @@ def _run_tracker_inner():
             veto = f"Sector cap: {MAX_PER_SECTOR} in {sector}"
         elif row['setup'] < 40:
             veto = "Setup quality too low (extended/broken)"
-        elif shares < 1:
-            veto = "Position sizes to < 1 share"
+        elif not fractional and shares < 1:
+            veto = "Position sizes to < 1 share (enable fractional shares)"
+        elif fractional and shares * entry < MIN_FRACTIONAL_ORDER:
+            veto = f"Position under ${MIN_FRACTIONAL_ORDER:.2f} minimum order"
         elif actual_risk > heat_available - sum(p['risk'] for p in plans):
             veto = f"Portfolio heat cap ({max_heat_pct}%) exceeded"
 
@@ -451,6 +475,7 @@ def _run_tracker_inner():
             'rr': 2.0, 'atr': round(row['atr'], 2),
             'days_to_earnings': days_to_earn,
             'value_capped': capped,
+            'fractional': is_fractional,
         })
     status.empty()
 
@@ -603,11 +628,16 @@ with tab1:
                     p1.metric("🎯 Buy Stop", f"${plan['entry']:.2f}")
                     p2.metric("🛑 Stop Loss", f"${plan['stop']:.2f}")
                     p3.metric("💰 Target (2R)", f"${plan['target']:.2f}")
-                    p4.metric("📦 Shares", f"{plan['shares']:,}")
+                    p4.metric("📦 Shares", fmt_shares(plan['shares']))
                     p5.metric("💵 Position", f"${plan['position_value']:,.0f}")
                     p6.metric("⚠️ Risk", f"${plan['risk']:,.0f}")
                     if plan.get('value_capped'):
                         st.caption(f"ℹ️ Shares capped at {MAX_POSITION_PCT*100:.0f}% of account — actual risk is below budget.")
+                    if plan.get('fractional'):
+                        st.caption(f"🧩 Fractional position — Fidelity won't accept a buy-stop for fractions. "
+                                   f"Set a price alert at ${plan['entry']:.2f}; when it triggers, enter a limit "
+                                   f"order near that price. Your ${plan['stop']:.2f} stop must also be watched "
+                                   f"and placed manually.")
 
                     if st.button(f"✅ I placed this order — track {plan['ticker']}",
                                  key=f"take_{plan['ticker']}"):
@@ -735,7 +765,7 @@ with tab2:
                 c4.metric("R-Multiple", f"{r_mult:+.2f}R")
                 c5.metric("Stop", f"${trade['stop_price']:.2f}")
                 c6.metric("Days", days_held)
-                st.caption(f"Target: ${trade['target_price']:.2f} · Initial stop: ${trade.get('initial_stop', trade['stop_price']):.2f} · Shares: {trade['shares']:,}")
+                st.caption(f"Target: ${trade['target_price']:.2f} · Initial stop: ${trade.get('initial_stop', trade['stop_price']):.2f} · Shares: {fmt_shares(trade['shares'])}")
 
                 sugg = a.get('suggested_stops', {})
                 bcols = st.columns(4)
@@ -800,7 +830,8 @@ with tab3:
             with c1:
                 m_tkr = st.text_input("Ticker", value="AAPL").upper().strip()
                 m_entry = st.number_input("Entry Price", min_value=0.01, step=0.01, value=150.00)
-                m_shares = st.number_input("Shares", min_value=1, step=1, value=100)
+                m_shares = st.number_input("Shares", min_value=0.001, step=0.001, value=1.0,
+                                           format="%.3f")
             with c2:
                 m_stop = st.number_input("Stop Loss", min_value=0.01, step=0.01, value=140.00)
                 m_target = st.number_input("Target", min_value=0.01, step=0.01, value=170.00)
