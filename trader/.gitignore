@@ -1,0 +1,4 @@
+# Daily working files from the day-trader plugin; only config.json is tracked
+*
+!.gitignore
+!config.json
